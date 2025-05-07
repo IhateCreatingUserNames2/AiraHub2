@@ -753,8 +753,41 @@ app.add_middleware(
 )
 
 
+@app.options("/mcp/messages", include_in_schema=False)
+async def options_mcp_messages():
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
+
 # Request logging middleware
 @app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    # Add CORS headers to all responses
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+
+    # Handle preflight requests
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                "Access-Control-Max-Age": "86400",
+            }
+        )
+
+    return response
 async def log_requests(request: Request, call_next):
     """Middleware to log requests"""
     start_time = time.time()
@@ -1131,6 +1164,8 @@ async def mcp_sse_endpoint(request: Request):
     client_id = str(uuid.uuid4())
     session_id = request.app.state.mcp_session_manager.create_session(client_id)
 
+    logger.info(f"Created new session {session_id} for client {client_id}")
+
     async def event_generator():
         # First, send the endpoint event with the messages URL
         # This is required by the MCP protocol
@@ -1192,15 +1227,30 @@ async def mcp_sse_endpoint(request: Request):
 
 @app.post("/mcp/messages", tags=["MCP"])
 async def mcp_messages_endpoint(request: Request):
-    """
-    MCP message endpoint
-
-    This endpoint handles MCP JSON-RPC messages from clients.
-    It processes tool calls and forwards them to the appropriate agents.
-    """
+    logger.info(f"Request to /mcp/messages: method={request.method}, content-type={request.headers.get('content-type')}")
+    logger.info(f"Query params: {request.query_params}")
     try:
-        # Parse the JSON-RPC request
-        body = await request.json()
+        # Read request body as bytes first
+        body_bytes = await request.body()
+
+        # Log for debugging
+        logger.debug(f"Request body received: {body_bytes!r}")
+
+        if not body_bytes:
+            return JSONResponse(
+                status_code=400,
+                content={"jsonrpc": "2.0", "error": {"code": -32600, "message": "Empty request body"}}
+            )
+
+        # Try to parse JSON
+        try:
+            body = json.loads(body_bytes)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {str(e)}, Body: {body_bytes!r}")
+            return JSONResponse(
+                status_code=400,
+                content={"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {str(e)}"}}
+            )
 
         # Get session ID from query parameters
         session_id = request.query_params.get("sessionId")
