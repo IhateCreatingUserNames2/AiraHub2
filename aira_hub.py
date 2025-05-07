@@ -788,83 +788,132 @@ async def process_single_mcp_message(
 
 async def mcp_stream_handler(
     stream_id: str,
-    initial_messages: List[Dict], # Messages from initial POST body
-    request_stream_gen: AsyncGenerator[bytes, None], # For subsequent messages
+    initial_messages: List[Dict],
+    request_stream_gen: AsyncGenerator[bytes, None],
     send_queue: asyncio.Queue,
     storage_inst: MongoDBStorage,
     app_state: Any
 ):
     logger.info(f"MCP Stream {stream_id}: Handler started.")
-    pending_tool_calls: Dict[Union[str, int], asyncio.Task] = {} # Track background tasks
-    buffer = b""
+    pending_tool_calls: Dict[Union[str, int], asyncio.Task] = {}
+    # Task to read subsequent messages from the client stream
+    reader_task: Optional[asyncio.Task] = None
+
+    async def _read_subsequent_messages():
+        """Reads and processes messages arriving after the initial POST."""
+        buffer = b""
+        try:
+            async for chunk in request_stream_gen:
+                if not chunk: continue
+                logger.debug(f"MCP Stream {stream_id}: Reader task received chunk: {len(chunk)} bytes")
+                buffer += chunk
+                while True:
+                    separator_pos = buffer.find(STREAM_SEPARATOR)
+                    if separator_pos == -1: break
+                    message_bytes = buffer[:separator_pos]
+                    buffer = buffer[separator_pos + len(STREAM_SEPARATOR):]
+                    if not message_bytes.strip(): continue
+                    try:
+                        msg_dict = json.loads(message_bytes.decode('utf-8'))
+                        # Process this subsequent message
+                        response = await process_single_mcp_message(
+                            msg_dict, stream_id, storage_inst, send_queue, pending_tool_calls
+                        )
+                        if response:
+                            await send_queue.put(response)
+                    except json.JSONDecodeError:
+                        logger.error(f"MCP Stream {stream_id}: JSONDecodeError (subsequent msg): {message_bytes.decode('utf-8', errors='ignore')[:200]}...")
+                        await send_queue.put(MCPResponseModel(id=None, error={"code": -32700, "message": "Parse error"}))
+                    except Exception as e_subsequent:
+                         logger.error(f"MCP Stream {stream_id}: Error processing subsequent message: {e_subsequent}", exc_info=True)
+                         error_id = None
+                         try:
+                             # Attempt to parse the message again just to get the ID for the error response
+                             error_msg_dict = json.loads(message_bytes.decode('utf-8'))
+                             if isinstance(error_msg_dict, dict):
+                                 error_id = error_msg_dict.get("id")
+                         except Exception:
+                             logger.warning(
+                                 f"MCP Stream {stream_id}: Could not parse message to extract ID for error reporting.")
+                             pass  # Keep error_id as None if parsing fails here too
+                         await send_queue.put(MCPResponseModel(id=error_id, error={"code": -32603, "message": "Internal error processing message"}))
+            logger.info(f"MCP Stream {stream_id}: Reader task finished (client stream closed).")
+        except asyncio.CancelledError:
+             logger.info(f"MCP Stream {stream_id}: Reader task cancelled.")
+        except Exception as e_reader:
+             logger.error(f"MCP Stream {stream_id}: Error in reader task: {e_reader}", exc_info=True)
+             try:
+                 # Signal error to the client if possible
+                 await send_queue.put(MCPResponseModel(id=None, error={"code": -32000, "message": "Hub stream reader error"}))
+             except Exception: pass # Ignore errors during error reporting
 
     try:
-        # 1. Process initial messages from POST body
+        # 1. Process initial messages synchronously within the handler start
         logger.debug(f"MCP Stream {stream_id}: Processing {len(initial_messages)} initial messages.")
+        initial_responses: List[Awaitable[None]] = []
         for initial_msg_dict in initial_messages:
+            # process_single_mcp_message handles creating background tasks for tools/call
+            # and puts direct responses (like initialize, tools/list) onto the queue immediately.
             response = await process_single_mcp_message(
                 initial_msg_dict, stream_id, storage_inst, send_queue, pending_tool_calls
             )
             if response:
-                await send_queue.put(response)
+                # Use put_nowait as we are in the same initial synchronous flow
+                send_queue.put_nowait(response)
 
-        # 2. Process subsequent messages from the stream
-        logger.debug(f"MCP Stream {stream_id}: Starting to listen for subsequent messages.")
-        async for chunk in request_stream_gen:
-            if not chunk: continue
-            logger.debug(f"MCP Stream {stream_id}: Received stream chunk: {len(chunk)} bytes")
-            buffer += chunk
+        # 2. Start the background task to read subsequent messages
+        reader_task = asyncio.create_task(_read_subsequent_messages())
+        logger.debug(f"MCP Stream {stream_id}: Reader task started.")
 
-            while True: # Process multiple messages if buffered
-                separator_pos = buffer.find(STREAM_SEPARATOR)
-                if separator_pos == -1: break # Need more data
+        # 3. Wait for EITHER the reader task to finish OR all pending tool calls to finish
+        #    We need to keep the connection open as long as work is happening or the client is sending.
+        #    A simple approach: wait for reader_task AND periodically check pending_tool_calls.
+        #    A more robust way: Use asyncio.wait or gather potentially.
 
-                message_bytes = buffer[:separator_pos]
-                buffer = buffer[separator_pos + len(STREAM_SEPARATOR):]
+        # Let's wait for the reader task primarily, the tool call callbacks handle responses.
+        # If the reader finishes, we still might have pending tool calls.
+        if reader_task:
+            await reader_task
+            logger.debug(f"MCP Stream {stream_id}: Reader task completed.")
 
-                if not message_bytes.strip(): continue # Skip potential empty lines
-
-                try:
-                    msg_dict = json.loads(message_bytes.decode('utf-8'))
-                    response = await process_single_mcp_message(
-                        msg_dict, stream_id, storage_inst, send_queue, pending_tool_calls
-                    )
-                    if response:
-                        await send_queue.put(response)
-                except json.JSONDecodeError:
-                     logger.error(f"MCP Stream {stream_id}: JSONDecodeError for subsequent msg: {message_bytes.decode('utf-8', errors='ignore')[:200]}...")
-                     await send_queue.put(MCPResponseModel(id=None, error={"code": -32700, "message": "Parse error"}))
-                except Exception as e_subsequent: # Catch errors in subsequent processing
-                     logger.error(f"MCP Stream {stream_id}: Error processing subsequent message: {e_subsequent}", exc_info=True)
-                     # Try to get ID from the invalid message if possible, otherwise use null
-                     error_id = None
-                     try: error_id = json.loads(message_bytes.decode('utf-8')).get("id")
-                     except Exception: pass
-                     await send_queue.put(MCPResponseModel(id=error_id, error={"code": -32603, "message": "Internal error processing message"}))
-
-
-        logger.info(f"MCP Stream {stream_id}: Client request stream finished.")
+        # After the client has stopped sending, wait for any outstanding tool calls
+        if pending_tool_calls:
+            logger.info(f"MCP Stream {stream_id}: Waiting for {len(pending_tool_calls)} pending tool calls to complete...")
+            await asyncio.gather(*pending_tool_calls.values(), return_exceptions=True)
+            logger.info(f"MCP Stream {stream_id}: All pending tool calls finished.")
 
     except asyncio.CancelledError:
-        logger.info(f"MCP Stream {stream_id}: Handler task cancelled.")
+        logger.info(f"MCP Stream {stream_id}: Main handler task cancelled.")
+        if reader_task and not reader_task.done():
+            reader_task.cancel() # Cancel reader if main handler is cancelled
     except Exception as e_handler_outer:
-        logger.error(f"MCP Stream {stream_id}: Unhandled error in stream handler: {e_handler_outer}", exc_info=True)
-        try: await send_queue.put(MCPResponseModel(id=None, error={"code": -32000, "message": "Hub stream processing error"}))
+        logger.error(f"MCP Stream {stream_id}: Unhandled error in main handler: {e_handler_outer}", exc_info=True)
+        if reader_task and not reader_task.done():
+            reader_task.cancel() # Ensure reader is cancelled on error
+        try:
+            await send_queue.put(MCPResponseModel(id=None, error={"code": -32000, "message": "Hub stream processing error"}))
         except Exception: pass
     finally:
-        # Cleanup logic (cancel pending tasks, remove from active streams)
-        logger.info(f"MCP Stream {stream_id}: Handler stopping. Cancelling {len(pending_tool_calls)} pending tool calls.")
-        for task_obj in list(pending_tool_calls.values()): # Use list copy for safe iteration
-            if not task_obj.done():
-                task_obj.cancel()
-        if pending_tool_calls:
-            await asyncio.gather(*pending_tool_calls.values(), return_exceptions=True)
+        # Final cleanup (ensure all pending tasks are cancelled, signal queue close)
+        logger.info(f"MCP Stream {stream_id}: Main handler stopping. Final check/cancel {len(pending_tool_calls)} tool calls.")
+        tasks_to_cancel = [task for task in pending_tool_calls.values() if not task.done()]
+        for task_obj in tasks_to_cancel:
+            task_obj.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True) # Wait for cancellations
+
+        # Also ensure reader task is awaited/cancelled if it exists
+        if reader_task and not reader_task.done():
+             reader_task.cancel()
+             try: await reader_task
+             except asyncio.CancelledError: pass
+
         await send_queue.put(None) # Signal writer to close
         if stream_id in app_state.active_mcp_streams:
-            del app_state.active_mcp_streams[stream_id]
-        logger.info(f"MCP Stream {stream_id}: Handler finished cleanup.")
+             del app_state.active_mcp_streams[stream_id]
+        logger.info(f"MCP Stream {stream_id}: Main handler finished cleanup.")
 
-
+# --- Endpoint Remains Mostly the Same ---
 @app.post("/mcp/stream", tags=["MCP (Streamable HTTP - Preferred)"])
 async def mcp_stream_preferred_endpoint(
     request: Request,
@@ -878,41 +927,29 @@ async def mcp_stream_preferred_endpoint(
     initial_messages = []
     try:
         initial_body_bytes = await request.body()
-        if initial_body_bytes.strip(): # Only process if body is not empty
+        if initial_body_bytes.strip():
              initial_body_str = initial_body_bytes.decode('utf-8')
              logger.debug(f"MCP Stream {stream_id}: Initial POST body: {initial_body_str}")
-             # Body could be a single message or a batch (array)
              parsed_initial_body = json.loads(initial_body_str)
-             if isinstance(parsed_initial_body, list):
-                 initial_messages.extend(parsed_initial_body)
-             elif isinstance(parsed_initial_body, dict):
-                 initial_messages.append(parsed_initial_body)
+             if isinstance(parsed_initial_body, list): initial_messages.extend(parsed_initial_body)
+             elif isinstance(parsed_initial_body, dict): initial_messages.append(parsed_initial_body)
              else:
                   logger.warning(f"MCP Stream {stream_id}: Invalid initial POST body type: {type(parsed_initial_body)}")
-                  # Return error immediately? Or let handler deal with it? Let handler send error response.
-                  initial_messages.append({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid initial request format"}}) # Send error via handler
-        else:
-            logger.debug(f"MCP Stream {stream_id}: Initial POST body is empty.")
-
+                  initial_messages.append({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid initial request format"}})
+        else: logger.debug(f"MCP Stream {stream_id}: Initial POST body empty.")
     except json.JSONDecodeError:
         logger.error(f"MCP Stream {stream_id}: Invalid JSON in initial POST body.", exc_info=True)
-        # Cannot proceed if initial body is invalid JSON
-        return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error in initial request"}})
+        return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error initial request"}})
     except Exception as e_init:
          logger.error(f"MCP Stream {stream_id}: Error processing initial body: {e_init}", exc_info=True)
          return JSONResponse(status_code=500, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "Internal error processing initial request"}})
 
-
     # --- Start Background Handler and Response Stream ---
     send_queue = asyncio.Queue()
+    # Pass initial messages to the handler
     handler_task = asyncio.create_task(
         mcp_stream_handler(
-            stream_id,
-            initial_messages, # Pass initial messages
-            request.stream(), # Pass stream generator for subsequent messages
-            send_queue,
-            storage_inst,
-            request.app.state
+            stream_id, initial_messages, request.stream(), send_queue, storage_inst, request.app.state
         )
     )
     request.app.state.active_mcp_streams[stream_id] = handler_task
@@ -932,6 +969,7 @@ async def mcp_stream_preferred_endpoint(
         except asyncio.CancelledError: logger.info(f"MCP Stream {stream_id}: Response generator cancelled.")
         except Exception as e_gen_outer: logger.error(f"MCP Stream {stream_id}: Error in response generator: {e_gen_outer}", exc_info=True)
         finally: logger.info(f"MCP Stream {stream_id}: Response generator finished.");
+        # Ensure handler task is cleaned up if response generator finishes/errors
         if handler_task and not handler_task.done(): handler_task.cancel()
 
     return StreamingResponse(response_generator(), media_type="application/json-seq")
