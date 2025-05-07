@@ -1121,6 +1121,107 @@ async def connect_stream_init_custom_endpoint(request_obj: Request, background_t
     except Exception as e: logger.error(f"Error /connect/stream/init: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
+# ----- Debug Endpoint -----
+
+@app.post("/debug/register-test-agent", tags=["Debug"], include_in_schema=False)
+async def debug_register_test_agent(
+    request: Request,                     # No default
+    background_tasks: BackgroundTasks,    # No default
+    storage_inst: MongoDBStorage = Depends(get_storage_dependency) # Default
+):
+    """
+    DEBUGGING ONLY: Manually registers a predefined test weather agent.
+    Simulates an external agent calling /register.
+    """
+    # ... (rest of the function remains the same) ...
+    agent_id = "test-weather-agent-001"
+    agent_url = "http://fake-weather-service.example.com" # Needs to be unique
+    mcp_endpoint = f"{agent_url}/mcp/stream" # The (fake) endpoint the agent exposes
+
+    logger.info(f"DEBUG: Attempting to register test agent: {agent_id}")
+
+    test_agent_payload = AgentRegistration(
+        agent_id=agent_id, # Use a fixed ID for idempotency
+        url=agent_url,
+        name="Test Weather Service",
+        description="Provides weather forecasts via NWS API (Simulated Registration).",
+        version="1.1.0",
+        mcp_tools=[
+            MCPTool(
+                name="get_forecast",
+                description="Get weather forecast for a location.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "latitude": {"type": "number", "description": "Latitude"},
+                        "longitude": {"type": "number", "description": "Longitude"}
+                    },
+                    "required": ["latitude", "longitude"]
+                }
+            ),
+            MCPTool(
+                name="get_alerts",
+                description="Get weather alerts for a US state.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "state": {"type": "string", "description": "Two-letter US state code"}
+                    },
+                    "required": ["state"]
+                }
+            )
+        ],
+        aira_capabilities=["mcp"],
+        status=AgentStatus.ONLINE, # Start as online
+        tags=["weather", "forecast", "test"],
+        category="Weather",
+        provider={"name": "Test Suite"},
+        # Set the MCP endpoint URL this agent *would* expose for Streamable HTTP
+        mcp_stream_url=mcp_endpoint,
+        # If testing with older clients/proxies, you might also set mcp_url
+        mcp_url=mcp_endpoint # Let's assume it handles simple POST too
+    )
+
+    # Use the existing register_agent_endpoint logic for consistency?
+    # Or call storage directly for simplicity in debug? Let's call storage.
+    try:
+        # Check if exists first to update or insert
+        existing = await storage_inst.get_agent(agent_id)
+        agent_to_save = test_agent_payload
+        if existing:
+            logger.info(f"DEBUG: Test agent {agent_id} already exists, updating.")
+            # Preserve creation time, potentially metrics etc.
+            agent_to_save.created_at = existing.created_at
+            agent_to_save.metrics = existing.metrics # Keep old metrics
+        else:
+            logger.info(f"DEBUG: Test agent {agent_id} does not exist, creating.")
+
+        # Ensure it's marked online and recently seen
+        agent_to_save.status = AgentStatus.ONLINE
+        agent_to_save.last_seen = time.time()
+
+        saved = await storage_inst.save_agent(agent_to_save)
+
+        if not saved:
+            raise HTTPException(status_code=500, detail="Failed to save test agent")
+
+        # Trigger UI update (optional but good)
+        if hasattr(request.app.state, 'connection_manager'):
+            event_name = "agent_updated" if existing else "agent_registered"
+            background_tasks.add_task(
+                request.app.state.connection_manager.broadcast_event,
+                event_name,
+                {"agent_id": agent_to_save.agent_id, "name": agent_to_save.name,
+                 "url": agent_to_save.url, "status": agent_to_save.status.value}
+            )
+
+        logger.info(f"DEBUG: Test agent '{agent_to_save.name}' registration successful.")
+        return {"status": "ok", "agent_id": agent_to_save.agent_id, "message": f"Test agent {agent_id} registered/updated."}
+
+    except Exception as e:
+        logger.error(f"DEBUG: Error registering test agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to register test agent: {e}")
+
 # ----- Main Entry Point -----
 if __name__ == "__main__":
     import uvicorn
