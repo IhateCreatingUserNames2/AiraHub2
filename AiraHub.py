@@ -1,3 +1,4 @@
+
 """
 AIRA Hub: A central registry for AI agents to discover and communicate with each other.
 
@@ -24,6 +25,8 @@ import os
 from datetime import datetime, timedelta
 from enum import Enum
 from contextlib import asynccontextmanager
+
+from sse_starlette import EventSourceResponse
 
 # Configure logging
 logging.basicConfig(
@@ -223,6 +226,13 @@ class BaseStorage:
     async def update_agent_heartbeat(self, url: str, timestamp: float):
         """Update agent heartbeat timestamp"""
         raise NotImplementedError()
+
+# MCP Protocol models
+class MCPTool(BaseModel):
+    name: str
+    description: Optional[str] = None
+    inputSchema: Dict[str, Any]
+    annotations: Optional[Dict[str, Any]] = None
 
 class MemoryStorage(BaseStorage):
     """In-memory storage backend"""
@@ -694,6 +704,130 @@ async def discover_agents(
         "limit": query.limit,
         "agents": agents
     }
+
+
+# MCP Protocol endpoints
+@app.get("/mcp/sse", tags=["MCP"])
+async def mcp_sse(request: Request):
+    """
+    Server-Sent Events endpoint for MCP
+
+    This endpoint establishes an SSE connection for MCP clients.
+    """
+
+    async def event_generator():
+        # Send endpoint event (required for SSE protocol)
+        yield f"event: endpoint\ndata: /mcp/messages\n\n"
+
+        # Keep connection alive
+        while True:
+            await asyncio.sleep(60)
+            yield f"event: heartbeat\ndata: {time.time()}\n\n"
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post("/mcp/messages", tags=["MCP"])
+async def mcp_messages(request: Request):
+    """
+    MCP message endpoint
+
+    This endpoint handles MCP JSON-RPC messages.
+    """
+    try:
+        # Parse request body
+        body = await request.json()
+
+        # Get session ID
+        session_id = request.query_params.get("sessionId")
+        if not session_id:
+            return JSONResponse(status_code=400, content={"error": "Missing sessionId"})
+
+        # Process message
+        if isinstance(body, dict) and "method" in body:
+            if body["method"] == "tools/list":
+                # List MCP tools registered with the hub
+                agents = await request.app.state.storage.list_agents()
+
+                # Find agents with MCP capabilities and tools
+                tools = []
+                for agent in agents:
+                    if "mcp" in agent.aira_capabilities:
+                        for resource in agent.shared_resources:
+                            if resource.type == ResourceType.MCP_TOOL:
+                                # Convert resource to MCP tool format
+                                tool = {
+                                    "name": resource.uri.split("/")[-1],
+                                    "description": resource.description,
+                                    "inputSchema": resource.metadata.get("inputSchema", {})
+                                }
+                                tools.append(tool)
+
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "tools": tools
+                    }
+                })
+            elif body["method"] == "tools/call":
+                # Call MCP tool
+                tool_name = body.get("params", {}).get("name")
+                arguments = body.get("params", {}).get("arguments", {})
+
+                # Find the agent with this tool
+                agents = await request.app.state.storage.list_agents()
+                target_agent = None
+                target_resource = None
+
+                for agent in agents:
+                    if "mcp" in agent.aira_capabilities:
+                        for resource in agent.shared_resources:
+                            if resource.type == ResourceType.MCP_TOOL and resource.uri.split("/")[-1] == tool_name:
+                                target_agent = agent
+                                target_resource = resource
+                                break
+
+                if not target_agent or not target_resource:
+                    return JSONResponse(content={
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "error": {
+                            "code": -32002,
+                            "message": f"Tool not found: {tool_name}"
+                        }
+                    })
+
+                # Handle the tool call (in a real implementation, you would forward this to the agent)
+                # This is a placeholder implementation
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Tool '{tool_name}' called with arguments: {json.dumps(arguments)}"
+                            }
+                        ]
+                    }
+                })
+
+            # Other MCP methods (you can add more as needed)
+            return JSONResponse(status_code=400, content={
+                "jsonrpc": "2.0",
+                "id": body.get("id", 0),
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {body['method']}"
+                }
+            })
+
+        return JSONResponse(status_code=400, content={"error": "Invalid request format"})
+    except Exception as e:
+        logger.error(f"Error processing MCP message: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": f"Internal server error: {str(e)}"})
+
 
 @app.get("/agents/{agent_url}", tags=["Agents"])
 async def get_agent(
