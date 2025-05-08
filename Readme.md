@@ -131,4 +131,9 @@ Common issues:
 ]
 ```
 
-For more details, consult the full documentation.
+Working on Claude Thru Aira hub on Render + NGROK (MCP SERVER)
+![image](https://github.com/user-attachments/assets/7fc71b54-9fb5-4094-b9cb-736e456ba8bd)
+![image](https://github.com/user-attachments/assets/2f7c886c-c795-4794-831c-61c2631bcff5)
+![image](https://github.com/user-attachments/assets/d2923099-a107-402b-b58f-276015955be0)
+
+
