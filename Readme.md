@@ -12,7 +12,7 @@ Currently running at: [https://airahub2.onrender.com/](https://airahub2.onrender
 
 ### Hosting Aira Hub
 To host your own Aira Hub instance:
-```bash
+```
 python aira_hub.py
 Managing MCP Servers
 Use the agent manager to run MCP servers and broadcast them to Aira Hub:
@@ -50,6 +50,9 @@ json
     } 
   } 
 ]]
+
+
+```
 Features
 Centralized hub for MCP servers
 
@@ -57,6 +60,11 @@ Easy server management through agent_manager
 
 Remote client connectivity
 """
+
+
+
+
+####
 ![image](https://github.com/user-attachments/assets/7e1c6f80-06e6-47ba-bc09-5f71afe0498c)
 
 
