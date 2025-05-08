@@ -3,7 +3,8 @@
 
 USAGE IN CLAUDE jSON: 
 """
-# [[
+# 
+[[
 {
   "mcpServers": {
     "aira-hub": {
