@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "aira-hub": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+
+        "http://localhost:8017/mcp/stream"
+
+      ]
+    }
+  }
+}
