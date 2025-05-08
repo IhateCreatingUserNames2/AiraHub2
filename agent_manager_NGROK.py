@@ -9,24 +9,42 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional, Tuple, Union
 
+# --- ADD THIS IMPORT ---
+from dotenv import load_dotenv
+
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Body
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+# ... other imports
+
+# --- ADD THIS CALL *RIGHT HERE*, BEFORE LOGGING/GETENV ---
+# Load environment variables from .env file. verbose=True helps debug loading.
+# find_dotenv() searches the current and parent directories for .env
+from dotenv import find_dotenv
+from pydantic import BaseModel
+from starlette.responses import JSONResponse
+
+env_path = find_dotenv()
+print(f"[DEBUG] Attempting to load .env from: {env_path}") # Add this print
+load_dotenv(dotenv_path=env_path, verbose=True, override=True) # Use find_dotenv path, verbose, and override
 
 # --- Configuration & Logging ---
+# Setup logging *after* dotenv potentially loaded logging config (though not used here)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s:%(lineno)d - %(levelname)s - %(message)s')
 logger = logging.getLogger("AgentManager")
+logger.info(".env file loading attempted.") # Log that it tried
 
 # --- Environment Variables or Defaults ---
+# These os.getenv calls will now see variables loaded from .env
 AIRA_HUB_REGISTER_URL = os.getenv("AIRA_HUB_URL", "https://airahub2.onrender.com") + "/register"
 AIRA_HUB_URL = os.getenv("AIRA_HUB_URL", "https://airahub2.onrender.com")
-# --- NEW BIND HOST ---
-AGENT_MANAGER_BIND_HOST = os.getenv("AGENT_MANAGER_BIND_HOST", "0.0.0.0") # Use localhost or 0.0.0.0 for binding
+AGENT_MANAGER_BIND_HOST = os.getenv("AGENT_MANAGER_BIND_HOST", "localhost") # Bind locally
+
+# --- Check the loaded value *before* setting the final variable ---
+_loaded_public_url = os.getenv("AGENT_MANAGER_PUBLIC_URL")
 AGENT_MANAGER_PORT = int(os.getenv("AGENT_MANAGER_PORT", "9010"))
-# --- PUBLIC URL (used for registration) ---
-AGENT_MANAGER_PUBLIC_URL = os.getenv("AGENT_MANAGER_PUBLIC_URL", f"http://{AGENT_MANAGER_BIND_HOST}:{AGENT_MANAGER_PORT}") # Default to local if public not set
-# --- Keep Port ---
+logger.info(f"Value read for AGENT_MANAGER_PUBLIC_URL from environment: '{_loaded_public_url}'") # CRITICAL DEBUG LINE
+AGENT_MANAGER_PUBLIC_URL = _loaded_public_url or f"http://{AGENT_MANAGER_BIND_HOST}:{AGENT_MANAGER_PORT}" # Default calculation
+logger.info(f"Final AGENT_MANAGER_PUBLIC_URL used for registration: {AGENT_MANAGER_PUBLIC_URL}") # CRITICAL DEBUG LINE
 
 CONFIG_FILE = "mcp_servers.json"
 MCP_TIMEOUT = 20  # Seconds for MCP calls (initialize, tools/list) to subprocess
