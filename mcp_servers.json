@@ -1,0 +1,51 @@
+[
+  {
+    "id": "semgrep-local-stdio",
+    "name": "Semgrep (via NPX/uvx)",
+    "enabled": false,
+    "connection": {
+      "type": "stdio",
+
+      "command": ["uvx.exe", "semgrep-mcp"]
+    },
+    "aira_hub_registration": {
+      "base_url": "local://semgrep.com/stdio/managed",
+      "description": "Local Semgrep MCP Server (Managed)",
+      "tags": ["security", "code-analysis", "local", "managed"],
+      "category": "Developer Tools",
+      "provider_name": "AgentManager/Semgrep Inc."
+    }
+  },
+  {
+    "id": "fetch-local-stdio",
+    "name": "Fetch (via NPX/uvx)",
+    "enabled": false,
+    "connection": {
+      "type": "stdio",
+      "command": ["uvx.exe", "mcp-server-fetch"]
+    },
+    "aira_hub_registration": {
+      "base_url": "local://mcpservers.org/fetch/stdio/managed",
+      "description": "Local Fetch MCP Server (Managed)",
+      "tags": ["web", "http-client", "local", "managed"],
+      "category": "Utilities",
+      "provider_name": "AgentManager/mcpservers.org"
+    }
+  },
+  {
+    "id": "sequential-thinking-local-stdio",
+    "name": "Sequential Thinking (via NPX)",
+    "enabled": true,
+    "connection": {
+      "type": "stdio",
+      "command": ["npx.cmd", "-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "aira_hub_registration": {
+      "base_url": "local://mcpservers.org/sequentialthinking/stdio/managed",
+      "description": "Sequential Thinking MCP Server (Managed)",
+      "tags": ["thinking", "problem-solving", "ai", "local", "managed"],
+      "category": "AI Tools",
+      "provider_name": "AgentManager/mcpservers.org"
+    }
+  }
+]
