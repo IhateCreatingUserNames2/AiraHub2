@@ -1,6 +1,12 @@
-![image](https://github.com/user-attachments/assets/72226304-6a0e-47e6-b788-19db2fe9f63d)
 
 
+DEMO RUNNING ON: https://airahub2.onrender.com/
+
+HOW TO USE: HOST aira_hub.py 
+
+use agent_manager.py to RUN MCP SERVERS AND BROADCAST THEM INTO AIRA HUB.
+
+CONNECT YOUR MCP CLIENT TO AIRA HUB : EXAMPLE CLAUDE: 
 USAGE IN CLAUDE jSON: 
 """
 # 
@@ -21,3 +27,6 @@ USAGE IN CLAUDE jSON:
 ]]
 #
 """
+
+
+![image](https://github.com/user-attachments/assets/72226304-6a0e-47e6-b788-19db2fe9f63d)
