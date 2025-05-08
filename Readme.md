@@ -2,7 +2,7 @@
 
 
 USAGE IN CLAUDE jSON: 
-
+"""
 {
   "mcpServers": {
     "aira-hub": {
@@ -17,4 +17,4 @@ USAGE IN CLAUDE jSON:
   }
 }
 
-
+"""
