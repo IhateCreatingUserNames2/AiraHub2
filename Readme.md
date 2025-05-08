@@ -20,6 +20,7 @@ Managing MCP Servers
 Use the agent manager to run MCP servers and broadcast them to Aira Hub:
 
 bash
+Populate mcp_servers.json with MCP SERVERS CONFIGURATIONS, CHECK THE TEMPLATE. ASK chatGPT to format it for new MCP Servers or adjust... 
 python agent_manager.py
 Connecting Clients
 Connect your MCP client to Aira Hub. Example configuration for Claude:
