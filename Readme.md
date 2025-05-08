@@ -1,49 +1,61 @@
 
 
-DEMO RUNNING ON: https://airahub2.onrender.com/
+markdown
+# Aira Hub
 
-HOW TO USE: HOST aira_hub.py 
+A platform for hosting and managing MCP (Multi-Client Protocol) servers.
 
-use agent_manager.py to RUN MCP SERVERS AND BROADCAST THEM INTO AIRA HUB.
+## Demo
+Currently running at: [https://airahub2.onrender.com/](https://airahub2.onrender.com/)
 
-CONNECT YOUR MCP CLIENT TO AIRA HUB : EXAMPLE CLAUDE: 
+## Installation & Usage
 
-Online demo: 
+### Hosting Aira Hub
+To host your own Aira Hub instance:
+```bash
+python aira_hub.py
+Managing MCP Servers
+Use the agent manager to run MCP servers and broadcast them to Aira Hub:
 
-{
-  "mcpServers": {
-    "aira-hub": {
-      "command": "npx",
-      "args": [
+bash
+python agent_manager.py
+Connecting Clients
+Connect your MCP client to Aira Hub. Example configuration for Claude:
+
+Online Demo Configuration
+json
+{ 
+  "mcpServers": { 
+    "aira-hub": { 
+      "command": "npx", 
+      "args": [ 
         "mcp-remote",
-
         "https://airahub2.onrender.com/mcp/stream"
-
       ]
     }
-  }
+  } 
 }
-
-
-USAGE IN CLAUDE jSON: 
-"""
-# 
-[[
-{
-  "mcpServers": {
-    "aira-hub": {
-      "command": "npx",
-      "args": [
-        "mcp-remote",
-
-        "http://localhost:8017/mcp/stream"
-
-      ]
-    }
-  }
-}
+Localhost Configuration
+json
+[[ 
+  { 
+    "mcpServers": { 
+      "aira-hub": { 
+        "command": "npx", 
+        "args": [ 
+          "mcp-remote",
+          "http://localhost:8017/mcp/stream"
+        ]
+      }
+    } 
+  } 
 ]]
-#
+Features
+Centralized hub for MCP servers
+
+Easy server management through agent_manager
+
+Remote client connectivity
 """
 ![image](https://github.com/user-attachments/assets/7e1c6f80-06e6-47ba-bc09-5f71afe0498c)
 
