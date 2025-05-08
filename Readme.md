@@ -5,6 +5,8 @@ markdown
 
 A platform for hosting and managing MCP (Multi-Client Protocol) servers.
 
+****** THIS SETUP USES MONGODB CLOUD TO STORE DATA ******** 
+
 ## Demo
 Currently running at: [https://airahub2.onrender.com/](https://airahub2.onrender.com/)
 
