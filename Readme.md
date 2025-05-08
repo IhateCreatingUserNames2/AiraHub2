@@ -7,6 +7,24 @@ HOW TO USE: HOST aira_hub.py
 use agent_manager.py to RUN MCP SERVERS AND BROADCAST THEM INTO AIRA HUB.
 
 CONNECT YOUR MCP CLIENT TO AIRA HUB : EXAMPLE CLAUDE: 
+
+Online demo: 
+
+{
+  "mcpServers": {
+    "aira-hub": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+
+        "https://airahub2.onrender.com/mcp/stream"
+
+      ]
+    }
+  }
+}
+
+
 USAGE IN CLAUDE jSON: 
 """
 # 
