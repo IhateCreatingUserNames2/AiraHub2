@@ -48,6 +48,7 @@ logger = logging.getLogger("aira_hub")
 DEFAULT_HEARTBEAT_TIMEOUT = 300  # 5 minutes
 DEFAULT_HEARTBEAT_INTERVAL = 60  # 1 minute
 DEFAULT_CLEANUP_INTERVAL = 120  # 2 minutes
+HUB_TIMEOUT = 10   # Seconds for registering with AIRA Hub
 MAX_TOOLS_PER_AGENT = 100
 STREAM_SEPARATOR = b'\r\n'
 MCP_TIMEOUT = 300.0 #
@@ -1366,67 +1367,165 @@ def get_storage_dependency(request: Request) -> MongoDBStorage:
 @app.post("/register", status_code=201, tags=["Agents"])
 async def register_agent_endpoint(
         request_obj: Request,
-        agent_payload: AgentRegistration,
+        agent_payload: AgentRegistration,  # This is the incoming payload from the agent registering
         background_tasks: BackgroundTasks,
         storage_inst: MongoDBStorage = Depends(get_storage_dependency)
 ):
     """
-    Register an agent with the AIRA hub
-
-    This endpoint allows agents to register themselves with the hub,
-    making them discoverable by other agents and clients.
+    Register an agent with the AIRA hub.
+    If the agent has 'a2a' capability, its agent.json will be fetched
+    and its A2A skills will be translated into MCP tools.
     """
-    # Check if agent already exists
+    logger.info(f"Received registration request for agent: {agent_payload.name} at URL: {agent_payload.url}")
+
+    # --- BEGIN A2A Skill Fetching and Translation ---
+    if "a2a" in agent_payload.aira_capabilities and agent_payload.url:
+        logger.info(f"Agent {agent_payload.name} has 'a2a' capability. Attempting to fetch its A2A Agent Card.")
+
+        # Ensure the URL doesn't already end with the .well-known path
+        base_url = agent_payload.url.rstrip('/')
+        if base_url.endswith("/.well-known/agent.json"):  # Should not happen if agent_payload.url is base
+            agent_card_url = base_url
+        elif base_url.endswith("/.well-known"):
+            agent_card_url = f"{base_url}/agent.json"
+        else:
+            agent_card_url = f"{base_url}/.well-known/agent.json"
+
+        try:
+            async with httpx.AsyncClient(timeout=HUB_TIMEOUT) as client:  # Use your HUB_TIMEOUT
+                logger.debug(f"Fetching A2A Agent Card from: {agent_card_url}")
+                response = await client.get(agent_card_url)
+                response.raise_for_status()  # Raise an exception for bad status codes (4xx, 5xx)
+                a2a_card_data = response.json()
+                logger.info(f"Successfully fetched A2A Agent Card for {agent_payload.name} from {agent_card_url}")
+
+                # We will replace agent_payload.mcp_tools with translated A2A skills.
+                # If an agent is BOTH A2A and MCP native, you might want to merge,
+                # but for now, A2A translation will define its MCP tools if A2A cap is present.
+                translated_mcp_tools = []
+
+                # Validate a2a_card_data (basic check for 'skills' list)
+                if "skills" in a2a_card_data and isinstance(a2a_card_data["skills"], list):
+                    for a2a_skill_dict in a2a_card_data["skills"]:
+                        if not isinstance(a2a_skill_dict, dict) or \
+                                not a2a_skill_dict.get("id") or \
+                                not a2a_skill_dict.get("name"):
+                            logger.warning(
+                                f"Skipping malformed A2A skill from {agent_payload.name}'s card: {a2a_skill_dict}")
+                            continue
+
+                        # Create a unique and descriptive MCP tool name
+                        # Example: "AgentName_A2A_SkillID"
+                        mcp_tool_name = f"{agent_payload.name.replace(' ', '_')}_A2A_{a2a_skill_dict['id']}"
+
+                        # The 'parameters' from A2ASkill should be a JSON schema object for inputSchema
+                        input_schema_for_mcp = a2a_skill_dict.get("parameters", {"type": "object",
+                                                                                 "properties": {}})  # Default if not present
+
+                        # Create an MCPTool instance (using your Hub's MCPTool Pydantic model)
+                        mcp_tool_def = MCPTool(
+                            name=mcp_tool_name,
+                            description=a2a_skill_dict.get("description", "No description provided."),
+                            inputSchema=input_schema_for_mcp,
+                            annotations={
+                                "aira_bridge_type": "a2a",  # Critical for the Hub to know how to call it
+                                "aira_a2a_target_skill_id": a2a_skill_dict['id'],
+                                "aira_a2a_agent_url": agent_payload.url  # Base URL of the A2A agent
+                            }
+                        )
+                        translated_mcp_tools.append(mcp_tool_def)
+
+                    # Replace the agent_payload's mcp_tools with these translated ones
+                    agent_payload.mcp_tools = translated_mcp_tools
+                    logger.info(
+                        f"Translated {len(agent_payload.mcp_tools)} A2A skills to MCP tools for {agent_payload.name}.")
+                else:
+                    logger.warning(
+                        f"No 'skills' array found or it's not a list in A2A Agent Card for {agent_payload.name}. No MCP tools generated from A2A skills.")
+                    agent_payload.mcp_tools = []  # Ensure it's empty if card was invalid
+
+        except httpx.HTTPStatusError as e_http:
+            logger.error(
+                f"HTTP error fetching A2A Agent Card for {agent_payload.name} from {agent_card_url}: {e_http.response.status_code} - {e_http.response.text[:200]}",
+                exc_info=True)
+            # Decide: Do you fail registration or register without A2A-derived tools?
+            # For now, let's register it but it won't have tools from A2A.
+            agent_payload.mcp_tools = []  # Ensure no tools if card fetch failed
+        except httpx.RequestError as e_req:
+            logger.error(
+                f"Request error fetching A2A Agent Card for {agent_payload.name} from {agent_card_url}: {e_req}",
+                exc_info=True)
+            agent_payload.mcp_tools = []
+        except json.JSONDecodeError as e_json:
+            logger.error(
+                f"JSON decode error parsing A2A Agent Card for {agent_payload.name} from {agent_card_url}: {e_json}",
+                exc_info=True)
+            agent_payload.mcp_tools = []
+        except Exception as e_card_proc:
+            logger.error(f"Unexpected error processing A2A Agent Card for {agent_payload.name}: {e_card_proc}",
+                         exc_info=True)
+            agent_payload.mcp_tools = []
+    # --- END A2A Skill Fetching and Translation ---
+
+    # Check if agent already exists by URL (more reliable for updates)
     existing_agent = await storage_inst.get_agent_by_url(agent_payload.url)
-    agent_to_save = agent_payload
+    agent_to_save = agent_payload  # Start with the (potentially modified by A2A translation) payload
     status_message = "registered"
 
     if existing_agent:
-        # Update existing agent's information but keep its ID
+        # Update existing agent's information but keep its ID and creation time
         agent_to_save.agent_id = existing_agent.agent_id
         agent_to_save.created_at = existing_agent.created_at
 
-        # Preserve metrics if not being overwritten
+        # Preserve metrics if not being overwritten by the new payload
         if existing_agent.metrics and agent_to_save.metrics is None:
             agent_to_save.metrics = existing_agent.metrics
 
         status_message = "updated"
-        logger.info(f"Agent {agent_to_save.name} update: {agent_to_save.agent_id}")
+        logger.info(f"Agent {agent_to_save.name} (ID: {agent_to_save.agent_id}) found. Preparing update.")
     else:
-        logger.info(f"New agent registration: {agent_to_save.url}")
+        # It's a new agent, agent_id would have been defaulted by Pydantic or can be generated here
+        # agent_to_save.agent_id = str(uuid.uuid4()) # Already handled by AgentRegistration model default_factory
+        logger.info(
+            f"New agent registration: {agent_to_save.name} at {agent_to_save.url} with new ID {agent_to_save.agent_id}")
 
-    # Initialize metrics if not present
+    # Initialize metrics if not present from payload or existing
     if agent_to_save.metrics is None:
         agent_to_save.metrics = AgentMetrics()
 
-    # Set status and timestamps
+    # Set status and timestamps for this registration/update event
     agent_to_save.status = AgentStatus.ONLINE
     agent_to_save.last_seen = time.time()
 
-    # Save the agent
+    # Save the agent (with potentially translated A2A skills as MCP tools)
     if not await storage_inst.save_agent(agent_to_save):
-        logger.error(f"Failed to save agent {agent_to_save.name}")
-        raise HTTPException(status_code=500, detail="Failed to save agent")
+        logger.error(f"Failed to save agent {agent_to_save.name} (ID: {agent_to_save.agent_id}) to database.")
+        raise HTTPException(status_code=500, detail="Failed to save agent to database")
 
     # Notify connected clients about the new/updated agent
-    if hasattr(request_obj.app.state, 'connection_manager'):
+    connection_manager = getattr(request_obj.app.state, 'connection_manager', None)
+    if connection_manager:
+        event_type = "agent_registered" if status_message == "registered" and not existing_agent else "agent_updated"
         background_tasks.add_task(
-            request_obj.app.state.connection_manager.broadcast_event,
-            "agent_registered" if status_message == "registered" else "agent_updated",
+            connection_manager.broadcast_event,
+            event_type,
             {
                 "agent_id": agent_to_save.agent_id,
                 "name": agent_to_save.name,
                 "url": agent_to_save.url,
-                "status": agent_to_save.status.value
+                "status": agent_to_save.status.value,
+                "mcp_tools_count": len(agent_to_save.mcp_tools),  # Include tool count
+                "a2a_skills_count": len(agent_to_save.a2a_skills)
             }
         )
 
-    logger.info(f"Agent {status_message} completed: {agent_to_save.name} ({agent_to_save.agent_id})")
+    logger.info(f"Agent {status_message} process completed for: {agent_to_save.name} (ID: {agent_to_save.agent_id})")
 
     return {
         "status": status_message,
         "agent_id": agent_to_save.agent_id,
-        "url": agent_to_save.url
+        "url": agent_to_save.url,
+        "discovered_mcp_tools_from_a2a": len(agent_to_save.mcp_tools) if "a2a" in agent_to_save.aira_capabilities else 0
     }
 
 
