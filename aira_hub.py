@@ -805,55 +805,70 @@ async def mcp_stream_handler(
         # This function should be defined within the mcp_stream_handler
         # so it has access to stream_id, send_queue, pending_tasks, and agent_http_client
 
+        # In aira_hub.py
+        # This function is defined inside mcp_stream_handler
+
         async def forward_and_process_agent_response(
-                client_mcp_req_id: Union[str, int],  # The ID from the original MCP client request
+                client_mcp_req_id: Union[str, int],
                 agent_target_url: str,
-                payload_to_agent: Dict[str, Any],  # This is the dict to be JSON POSTed to the downstream agent
+                payload_to_agent: Dict[str, Any],
                 agent_name_for_log: str,
-                is_a2a_bridged: bool,  # True if the downstream agent is A2A and response needs translation
-                # These are effectively "closed-over" variables from mcp_stream_handler's scope
-                # If this function were outside, they'd need to be passed explicitly.
+                is_a2a_bridged: bool,
+                # Scope variables passed from mcp_stream_handler:
                 stream_id: str,
                 send_queue: asyncio.Queue,
                 pending_tasks: Dict[str, asyncio.Task],
-                agent_http_client: httpx.AsyncClient  # The client created in mcp_stream_handler
+                agent_http_client: httpx.AsyncClient  # Use the client passed from mcp_stream_handler
         ):
             """
             Forwards a request (MCP or A2A) to a target agent,
             processes its response, and puts an MCPResponseModel onto the send_queue
-            for the original MCP client.
+            for the original MCP client. Includes custom headers for outgoing POST.
             """
             logger.info(
-                f"MCP Stream {stream_id}: Forwarding to agent '{agent_name_for_log}' at {agent_target_url} for MCP ID {client_mcp_req_id}. Payload: {json.dumps(payload_to_agent)}")
-            response_text_debug = ""  # For logging raw response if JSON parsing fails
+                f"MCP Stream {stream_id}: Preparing to forward to agent '{agent_name_for_log}' at {agent_target_url} for MCP ID {client_mcp_req_id}.")
+            response_text_debug = ""
+
+            # --- Prepare Custom Headers ---
+            custom_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Connection": "keep-alive"
+                # "ngrok-skip-browser-warning": "true" # Generally not needed for API calls
+            }
+            # httpx sets Content-Type application/json automatically when using `json=` parameter.
+            # If it were an A2A call that required a *different* Content-Type for some reason,
+            # you would set it here based on `is_a2a_bridged`. For standard A2A JSON-RPC,
+            # `application/json` is correct.
+
+            logger.debug(
+                f"MCP Stream {stream_id}: Outgoing POST to {agent_target_url} for MCP ID {client_mcp_req_id}. Headers: {custom_headers}. Payload: {json.dumps(payload_to_agent)}")
 
             try:
                 response_from_agent_http = await agent_http_client.post(
                     agent_target_url,
-                    json=payload_to_agent
-                    # timeout=MCP_TIMEOUT (already set on agent_http_client in mcp_stream_handler)
+                    json=payload_to_agent,
+                    headers=custom_headers,  # Apply custom headers
+                    timeout=60.0  # Explicit timeout for this specific call
                 )
                 response_text_debug = response_from_agent_http.text
+                logger.info(
+                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' HTTP response status {response_from_agent_http.status_code} for MCP ID {client_mcp_req_id}.")
                 logger.debug(
-                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' raw HTTP response status {response_from_agent_http.status_code} for MCP ID {client_mcp_req_id}: {response_text_debug[:300]}...")  # Log more for debugging
+                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' raw response body for MCP ID {client_mcp_req_id}: {response_text_debug[:500]}...")  # Log more for debugging
                 response_from_agent_http.raise_for_status()  # Raise for 4xx/5xx
 
                 agent_response_data_dict = response_from_agent_http.json()
 
-                mcp_result_payload_for_client: Optional[
-                    List[Dict[str, Any]]] = None  # MCP expects an array of content items
+                mcp_result_payload_for_client: Optional[List[Dict[str, Any]]] = None
 
                 if is_a2a_bridged:
-                    # Response is an A2A JSON-RPC dict. Translate its 'result' (A2ATaskResult)
-                    # into an MCP result (List[MCP TextContent/etc.])
                     logger.debug(
                         f"MCP Stream {stream_id}: Translating A2A response from '{agent_name_for_log}' for MCP ID {client_mcp_req_id}. A2A Response: {json.dumps(agent_response_data_dict)}")
-
                     if "result" in agent_response_data_dict and isinstance(agent_response_data_dict["result"], dict):
                         a2a_task_result = agent_response_data_dict["result"]
                         extracted_text_content: Optional[str] = None
-
-                        # Attempt to extract primary text from A2A artifacts
                         if "artifacts" in a2a_task_result and isinstance(a2a_task_result["artifacts"], list) and \
                                 a2a_task_result["artifacts"]:
                             first_artifact = a2a_task_result["artifacts"][0]
@@ -864,12 +879,10 @@ async def mcp_stream_handler(
                                     extracted_text_content = first_part.get("text")
 
                         if extracted_text_content is not None:
-                            # Standard MCP `tools/call` result is an array of content objects
                             mcp_result_payload_for_client = [{"type": "text", "text": extracted_text_content}]
                             logger.info(
                                 f"MCP Stream {stream_id}: Successfully translated A2A text artifact to MCP TextContent for MCP ID {client_mcp_req_id}.")
                         else:
-                            # If no text artifact, check for a status message from A2A agent
                             status_state = a2a_task_result.get("status", {}).get("state", "unknown_a2a_state")
                             status_message_obj = a2a_task_result.get("status", {}).get("message", {})
                             status_message_parts = status_message_obj.get("parts", []) if isinstance(status_message_obj,
@@ -877,73 +890,67 @@ async def mcp_stream_handler(
                             a2a_status_text = None
                             if status_message_parts and status_message_parts[0].get("type") == "text":
                                 a2a_status_text = status_message_parts[0].get("text")
-
                             fallback_message = f"A2A Task Status: {status_state}."
                             if a2a_status_text:
                                 fallback_message += f" Message: {a2a_status_text}"
                             else:
                                 fallback_message += " No primary text artifact returned by A2A agent."
-
                             logger.warning(
                                 f"MCP Stream {stream_id}: No primary text artifact in A2A response for MCP ID {client_mcp_req_id}. Using fallback: {fallback_message}")
                             mcp_result_payload_for_client = [{"type": "text", "text": fallback_message}]
-
-                    elif "error" in agent_response_data_dict:  # A2A agent itself returned a JSON-RPC error
+                    elif "error" in agent_response_data_dict:
                         a2a_error = agent_response_data_dict['error']
                         logger.error(
-                            f"MCP Stream {stream_id}: A2A Agent '{agent_name_for_log}' (for MCP ID {client_mcp_req_id}) returned an A2A error: {a2a_error}")
+                            f"MCP Stream {stream_id}: A2A Agent '{agent_name_for_log}' (MCP ID {client_mcp_req_id}) returned an A2A error: {a2a_error}")
                         await send_queue.put(MCPResponseModel(id=client_mcp_req_id,
                                                               error={"code": a2a_error.get("code", -32006),
                                                                      "message": f"A2A Agent Error: {a2a_error.get('message', 'Unknown A2A error')}",
                                                                      "data": a2a_error.get("data")}))
-                        return  # Error already sent
-                    else:  # Unexpected A2A response structure (not a valid JSON-RPC with result or error)
+                        return
+                    else:
                         logger.error(
                             f"MCP Stream {stream_id}: Unexpected A2A response structure from '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {agent_response_data_dict}")
                         await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32005,
                                                                                            "message": "Hub error: Could not parse A2A agent's response structure"}))
                         return
-
                 else:  # Direct MCP agent call
                     logger.debug(
                         f"MCP Stream {stream_id}: Processing direct MCP response from '{agent_name_for_log}' for MCP ID {client_mcp_req_id}.")
-                    # Response is assumed to be an MCP-compatible result or a full MCPResponseModel
                     if isinstance(agent_response_data_dict, dict) and agent_response_data_dict.get("jsonrpc") == "2.0":
-                        # Agent sent a full MCPResponseModel back
                         try:
                             mcp_resp_from_agent = MCPResponseModel(**agent_response_data_dict)
-                            if mcp_resp_from_agent.error:  # Agent reported an MCP error
+                            if mcp_resp_from_agent.error:
                                 logger.warning(
                                     f"MCP Stream {stream_id}: Direct MCP agent '{agent_name_for_log}' returned error for MCP ID {client_mcp_req_id}: {mcp_resp_from_agent.error}")
                                 await send_queue.put(
                                     MCPResponseModel(id=client_mcp_req_id, error=mcp_resp_from_agent.error))
                                 return
-                            mcp_result_payload_for_client = mcp_resp_from_agent.result  # This should already be List[ContentObject] if agent is compliant
+                            mcp_result_payload_for_client = mcp_resp_from_agent.result
                         except ValidationError as e_val_agent_resp:
                             logger.error(
-                                f"MCP Stream {stream_id}: Invalid MCPResponseModel structure from direct MCP agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_val_agent_resp}")
+                                f"MCP Stream {stream_id}: Invalid MCPResponseModel from direct MCP agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_val_agent_resp}")
                             await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32005,
-                                                                                               "message": "Invalid response structure from target MCP agent",
+                                                                                               "message": "Invalid response from target MCP agent",
                                                                                                "data": str(
                                                                                                    e_val_agent_resp)}))
                             return
-                    else:  # Agent sent a raw result object (e.g. just the array of content parts)
-                        # This assumes the agent is correctly formatting its "raw result" to be List[ContentObject]
+                    else:
                         if isinstance(agent_response_data_dict, list):
                             mcp_result_payload_for_client = agent_response_data_dict
-                        else:  # If it's a single object, wrap it in a list for MCP compliance for tools/call
+                        else:
                             logger.warning(
-                                f"MCP Stream {stream_id}: Direct MCP agent '{agent_name_for_log}' returned a non-list result for MCP ID {client_mcp_req_id}. Wrapping it. Result: {agent_response_data_dict}")
+                                f"MCP Stream {stream_id}: Direct MCP agent '{agent_name_for_log}' returned non-list result for MCP ID {client_mcp_req_id}. Wrapping. Result: {agent_response_data_dict}")
                             mcp_result_payload_for_client = [agent_response_data_dict]
 
-                # Final check: mcp_result_payload_for_client should be a list for tools/call result.
-                if not isinstance(mcp_result_payload_for_client, list):
+                if not isinstance(mcp_result_payload_for_client, list):  # Final safety net
                     logger.warning(
-                        f"MCP Stream {stream_id}: Result for MCP ID {client_mcp_req_id} is not a list after processing. Type: {type(mcp_result_payload_for_client)}. Wrapping into a list with text content.")
+                        f"MCP Stream {stream_id}: Result for MCP ID {client_mcp_req_id} is not a list before sending. Type: {type(mcp_result_payload_for_client)}. Wrapping into text.")
                     mcp_result_payload_for_client = [{"type": "text", "text": json.dumps(
                         mcp_result_payload_for_client) if mcp_result_payload_for_client is not None else "No specific result content."}]
 
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, result=mcp_result_payload_for_client))
+                logger.info(
+                    f"MCP Stream {stream_id}: Successfully queued MCPResponseModel for MCP ID {client_mcp_req_id} to client.")
 
             except httpx.HTTPStatusError as e_http:
                 logger.error(
@@ -952,7 +959,13 @@ async def mcp_stream_handler(
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32003,
                                                                                    "message": f"Agent error: {e_http.response.status_code}",
                                                                                    "data": response_text_debug[:500]}))
-            except httpx.RequestError as e_req:  # Includes ConnectError, ReadTimeout, etc.
+            except httpx.Timeout as e_timeout:  # Specific timeout handling
+                logger.error(
+                    f"MCP Stream {stream_id}: Timeout calling agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_timeout}",
+                    exc_info=False)
+                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
+                                                                                   "message": f"Agent call timed out: {type(e_timeout).__name__}"}))
+            except httpx.RequestError as e_req:
                 logger.error(
                     f"MCP Stream {stream_id}: Agent request error for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
                     exc_info=False)
@@ -973,6 +986,8 @@ async def mcp_stream_handler(
             finally:
                 if client_mcp_req_id is not None and str(client_mcp_req_id) in pending_tasks:
                     del pending_tasks[str(client_mcp_req_id)]
+                logger.info(
+                    f"MCP Stream {stream_id}: Exiting forward_and_process_agent_response for MCP ID {client_mcp_req_id}")
 
         async def process_mcp_request(req_data: Dict[str, Any]):
             try:
