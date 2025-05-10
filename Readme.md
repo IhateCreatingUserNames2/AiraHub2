@@ -6,6 +6,7 @@
 
 A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop to discover and leverage a diverse ecosystem of tools and agents.
 
+To test demo in claude use the Json or edit your Json.  https://github.com/IhateCreatingUserNames2/AiraHub2/blob/main/claude_desktop_config.json 
 ## Overview
 
 This project facilitates a powerful new way for AI agents to collaborate and extend their capabilities. It consists of two primary components:
