@@ -848,6 +848,7 @@ async def mcp_stream_handler(
 
         async def forward_and_process_agent_response(
                 client_mcp_req_id: Union[str, int],
+                original_client_method: str,
                 agent_target_url: str,
                 payload_to_agent: Dict[str, Any],
                 agent_name_for_log: str,
@@ -968,17 +969,21 @@ async def mcp_stream_handler(
                         final_mcp_object_to_queue = MCPResponseModel(id=client_mcp_req_id, result=wrapped_result)
 
                 if final_mcp_object_to_queue:
+                    if original_client_method == "tools/call" and \
+                            final_mcp_object_to_queue.result and \
+                            isinstance(final_mcp_object_to_queue.result, list) and \
+                            not final_mcp_object_to_queue.error:
+                        logger.debug(
+                            f"MCP Stream {stream_id}: Wrapping 'tools/call' result for MCP ID {client_mcp_req_id}.")
+                        actual_mcp_result_object = {
+                            "content": final_mcp_object_to_queue.result
+                        }
+                        final_mcp_object_to_queue.result = actual_mcp_result_object
+
                     await send_queue.put(final_mcp_object_to_queue)
                     response_queued_successfully = True
                     logger.info(
-                        f"MCP Stream {stream_id}: Successfully queued MCPResponse for MCP ID {client_mcp_req_id} to client.")
-                else:  # Should not happen if logic above is correct
-                    logger.error(
-                        f"MCP Stream {stream_id}: final_mcp_object_to_queue was None for MCP ID {client_mcp_req_id}. This is a bug.")
-                    # Send a generic error if nothing else was formed
-                    await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32000,
-                                                                                       "message": "Hub internal error: Failed to form agent response."}))
-                    response_queued_successfully = True
+                        f"MCP Stream {stream_id}: Successfully queued MCPResponse for MCP ID {client_mcp_req_id} to client. Final structure: {final_mcp_object_to_queue.model_dump_json(exclude_none=True, indent=2)}")
 
 
 
@@ -1236,6 +1241,7 @@ async def mcp_stream_handler(
                                     fwd_task = asyncio.create_task(
                                         forward_and_process_agent_response(
                                             client_mcp_req_id=mcp_req.id, agent_target_url=target_url,
+                                            original_client_method=mcp_req.method,
                                             payload_to_agent=downstream_payload, agent_name_for_log=agent.name,
                                             is_a2a_bridged=is_a2a
                                         )
