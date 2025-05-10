@@ -788,7 +788,7 @@ async def lifespan(app_instance: FastAPI):
 
 
 # ----- MCP STREAM HANDLER -----
-# ----- MCP STREAM HANDLER -----
+
 async def mcp_stream_handler(
         stream_id: str,
         initial_messages: List[Dict[str, Any]],
@@ -1321,26 +1321,34 @@ async def mcp_stream_handler(
                     outstanding_responses_event.set()
 
             while not (reader_task_finished_event.is_set() and outstanding_responses_event.is_set()):
-                all_managed_tasks = [reader_main_task] + list(pending_tasks.values()) + background_notifications
-                # Filter out already done tasks for the wait
-                tasks_to_wait_on = [t for t in all_managed_tasks if t and not t.done()]
+                active_tasks = []
+                if reader_main_task and not reader_main_task.done():
+                    active_tasks.append(reader_main_task)
+                for task in pending_tasks.values():
+                    if task and not task.done():
+                        active_tasks.append(task)
+                for task in background_notifications:
+                    if task and not task.done():
+                        active_tasks.append(task)
 
-                # Add event waits
-                event_waits = [reader_task_finished_event.wait(), outstanding_responses_event.wait()]
+                # Create tasks for event waits
+                event_wait_task_list = [
+                    asyncio.create_task(reader_task_finished_event.wait()),
+                    asyncio.create_task(outstanding_responses_event.wait())
+                ]
 
-                if not tasks_to_wait_on and not event_waits:  # Should not happen if loop condition is true
-                    logger.warning(
-                        f"MCP Stream {stream_id}: Loop condition true but no tasks or events to wait on. Breaking.")
+                tasks_to_wait_on = active_tasks + event_wait_task_list
+
+                if not tasks_to_wait_on:
+                    logger.debug(f"MCP Stream {stream_id}: No active tasks or event waits in the main loop. Breaking.")
                     break
 
-                wait_for_these = tasks_to_wait_on + event_waits
-
                 logger.debug(
-                    f"MCP Stream {stream_id}: Main loop waiting. Reader done: {reader_task_finished_event.is_set()}, Outstanding responses done: {outstanding_responses_event.is_set()}, Pending tasks: {len(pending_tasks)}")
+                    f"MCP Stream {stream_id}: Main loop waiting. Reader done: {reader_task_finished_event.is_set()}, Outstanding responses done: {outstanding_responses_event.is_set()}, Pending tasks: {len(pending_tasks)}, Tasks to wait on: {len(tasks_to_wait_on)}")
 
-                done, pending = await asyncio.wait(
-                    wait_for_these,
-                    timeout=1.0,  # Periodically check conditions
+                done, pending_after_wait = await asyncio.wait(  # Renamed 'pending' to avoid conflict
+                    tasks_to_wait_on,
+                    timeout=1.0,
                     return_when=asyncio.FIRST_COMPLETED
                 )
 
@@ -1349,10 +1357,15 @@ async def mcp_stream_handler(
 
                 # Handle tasks that completed if necessary (e.g., log errors from background_notifications)
                 for task in done:
-                    if task in background_notifications and task.done() and task.exception():
-                        logger.error(f"MCP Stream {stream_id}: Background notification task failed: {task.exception()}",
-                                     exc_info=task.exception())
-                        background_notifications.remove(task)
+                    if task in background_notifications and task.done():  # Check if it's a background task
+                        if task.exception():
+                            logger.error(
+                                f"MCP Stream {stream_id}: Background notification task failed: {task.exception()}",
+                                exc_info=task.exception())
+                        try:
+                            background_notifications.remove(task)
+                        except ValueError:
+                            pass
 
             logger.info(
                 f"MCP Stream {stream_id}: Loop exited. Reader finished: {reader_task_finished_event.is_set()}, All responses handled: {outstanding_responses_event.is_set()}."
