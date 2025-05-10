@@ -783,10 +783,11 @@ async def lifespan(app_instance: FastAPI):
     except Exception as e:
         logger.critical(f"AIRA Hub critical startup error: {e}", exc_info=True)
         app_instance.state.storage_failed = True
-        # For now, let it yield so FastAPI can report error, but storage will be unavailable.
-        yield # Allow FastAPI to handle the error during startup if possible
+
+        yield
 
 
+# ----- MCP STREAM HANDLER -----
 # ----- MCP STREAM HANDLER -----
 async def mcp_stream_handler(
         stream_id: str,
@@ -798,69 +799,64 @@ async def mcp_stream_handler(
 ):
     """Handles the bi-directional MCP Streamable HTTP communication."""
     pending_tasks: Dict[str, asyncio.Task] = {}  # Tracks all async tasks for this stream
+    background_notifications: List[asyncio.Task] = []
     # Use a single httpx.AsyncClient for the duration of this stream handler
-    async with httpx.AsyncClient(timeout=MCP_TIMEOUT) as agent_http_client:  # Default timeout for POSTs
+    async with httpx.AsyncClient(timeout=MCP_TIMEOUT,
+                                 verify=True) as agent_http_client:  # verify=True is default and recommended
 
-        # In aira_hub.py
-        # This function should be defined within the mcp_stream_handler
-        # so it has access to stream_id, send_queue, pending_tasks, and agent_http_client
+        reader_task_finished_event = asyncio.Event()
+        outstanding_responses_event = asyncio.Event()  # To signal all expected responses are queued
 
-        # In aira_hub.py
-        # This function is defined inside mcp_stream_handler
+        # Initially assume there are no outstanding responses until a request with ID is made
+        if not any(msg.get("id") is not None for msg in initial_messages if isinstance(msg, dict)):
+            outstanding_responses_event.set()
 
+        # --- NESTED HELPER FUNCTION: forward_and_process_agent_response ---
         async def forward_and_process_agent_response(
                 client_mcp_req_id: Union[str, int],
                 agent_target_url: str,
                 payload_to_agent: Dict[str, Any],
                 agent_name_for_log: str,
-                is_a2a_bridged: bool,
-                # Scope variables passed from mcp_stream_handler:
-                stream_id: str,
-                send_queue: asyncio.Queue,
-                pending_tasks: Dict[str, asyncio.Task],
-                agent_http_client: httpx.AsyncClient  # Use the client passed from mcp_stream_handler
+                is_a2a_bridged: bool
+                # Implicitly uses: stream_id, send_queue, pending_tasks, agent_http_client,
+                #                  outstanding_responses_event, reader_task_finished_event from outer scope
         ):
-            """
-            Forwards a request (MCP or A2A) to a target agent,
-            processes its response, and puts an MCPResponseModel onto the send_queue
-            for the original MCP client. Includes custom headers for outgoing POST.
-            """
             logger.info(
-                f"MCP Stream {stream_id}: Preparing to forward to agent '{agent_name_for_log}' at {agent_target_url} for MCP ID {client_mcp_req_id}.")
+                f"MCP Stream {stream_id}: ENTERING forward_and_process_agent_response for MCP ID {client_mcp_req_id} to '{agent_name_for_log}' at {agent_target_url}"
+            )
             response_text_debug = ""
 
-            # --- Prepare Custom Headers ---
             custom_headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Connection": "keep-alive"
-                # "ngrok-skip-browser-warning": "true" # Generally not needed for API calls
             }
-            # httpx sets Content-Type application/json automatically when using `json=` parameter.
-            # If it were an A2A call that required a *different* Content-Type for some reason,
-            # you would set it here based on `is_a2a_bridged`. For standard A2A JSON-RPC,
-            # `application/json` is correct.
 
             logger.debug(
-                f"MCP Stream {stream_id}: Outgoing POST to {agent_target_url} for MCP ID {client_mcp_req_id}. Headers: {custom_headers}. Payload: {json.dumps(payload_to_agent)}")
+                f"MCP Stream {stream_id}: Outgoing POST to {agent_target_url} for MCP ID {client_mcp_req_id}. Headers: {custom_headers}. Payload: {json.dumps(payload_to_agent)}"
+            )
 
             try:
+                logger.info(
+                    f"MCP Stream {stream_id}: ATTEMPTING POST to agent '{agent_name_for_log}' at {agent_target_url} for MCP ID {client_mcp_req_id}."
+                )
                 response_from_agent_http = await agent_http_client.post(
                     agent_target_url,
                     json=payload_to_agent,
-                    headers=custom_headers,  # Apply custom headers
-                    timeout=60.0  # Explicit timeout for this specific call
+                    headers=custom_headers,
+                    timeout=60.0
                 )
                 response_text_debug = response_from_agent_http.text
                 logger.info(
-                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' HTTP response status {response_from_agent_http.status_code} for MCP ID {client_mcp_req_id}.")
+                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' HTTP response status {response_from_agent_http.status_code} for MCP ID {client_mcp_req_id}."
+                )
                 logger.debug(
-                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' raw response body for MCP ID {client_mcp_req_id}: {response_text_debug[:500]}...")  # Log more for debugging
-                response_from_agent_http.raise_for_status()  # Raise for 4xx/5xx
+                    f"MCP Stream {stream_id}: Agent '{agent_name_for_log}' raw response body for MCP ID {client_mcp_req_id}: {response_text_debug[:500]}..."
+                )
+                response_from_agent_http.raise_for_status()
 
                 agent_response_data_dict = response_from_agent_http.json()
-
                 mcp_result_payload_for_client: Optional[List[Dict[str, Any]]] = None
 
                 if is_a2a_bridged:
@@ -942,7 +938,7 @@ async def mcp_stream_handler(
                                 f"MCP Stream {stream_id}: Direct MCP agent '{agent_name_for_log}' returned non-list result for MCP ID {client_mcp_req_id}. Wrapping. Result: {agent_response_data_dict}")
                             mcp_result_payload_for_client = [agent_response_data_dict]
 
-                if not isinstance(mcp_result_payload_for_client, list):  # Final safety net
+                if not isinstance(mcp_result_payload_for_client, list):
                     logger.warning(
                         f"MCP Stream {stream_id}: Result for MCP ID {client_mcp_req_id} is not a list before sending. Type: {type(mcp_result_payload_for_client)}. Wrapping into text.")
                     mcp_result_payload_for_client = [{"type": "text", "text": json.dumps(
@@ -954,42 +950,59 @@ async def mcp_stream_handler(
 
             except httpx.HTTPStatusError as e_http:
                 logger.error(
-                    f"MCP Stream {stream_id}: Agent HTTP error for MCP ID {client_mcp_req_id} from '{agent_name_for_log}': {e_http.response.status_code} - {response_text_debug}",
-                    exc_info=False)
+                    f"MCP Stream {stream_id}: Agent HTTPStatusError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}': {e_http.response.status_code} - Response: {response_text_debug[:500]}",
+                    exc_info=True
+                )
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32003,
                                                                                    "message": f"Agent error: {e_http.response.status_code}",
                                                                                    "data": response_text_debug[:500]}))
-            except httpx.Timeout as e_timeout:  # Specific timeout handling
+            except httpx.Timeout as e_timeout:
                 logger.error(
                     f"MCP Stream {stream_id}: Timeout calling agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_timeout}",
-                    exc_info=False)
+                    exc_info=True
+                )
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
                                                                                    "message": f"Agent call timed out: {type(e_timeout).__name__}"}))
             except httpx.RequestError as e_req:
                 logger.error(
-                    f"MCP Stream {stream_id}: Agent request error for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
-                    exc_info=False)
+                    f"MCP Stream {stream_id}: Agent httpx.RequestError for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
+                    exc_info=True
+                )
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
                                                                                    "message": f"Agent communication error: {type(e_req).__name__}"}))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e_json_dec:
                 logger.error(
-                    f"MCP Stream {stream_id}: Agent JSON decode error for MCP ID {client_mcp_req_id} from '{agent_name_for_log}'. Response text: {response_text_debug[:500]}",
-                    exc_info=False)
+                    f"MCP Stream {stream_id}: Agent JSONDecodeError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}'. Response text: {response_text_debug[:500]}",
+                    exc_info=True
+                )
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id,
-                                                      error={"code": -32005, "message": "Agent response parse error"}))
-            except Exception as e_fwd:
+                                                      error={"code": -32005, "message": "Agent response parse error",
+                                                             "data": str(e_json_dec)}))
+            except Exception as e_fwd_generic:
                 logger.error(
-                    f"MCP Stream {stream_id}: Unexpected error in forward_and_process_agent_response for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_fwd).__name__} - {e_fwd}",
-                    exc_info=True)
-                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32000,
-                                                                                   "message": "Hub internal error during agent communication"}))
+                    f"MCP Stream {stream_id}: GENERIC UNHANDLED EXCEPTION in forward_and_process_agent_response for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_fwd_generic).__name__} - {e_fwd_generic}",
+                    exc_info=True
+                )
+                try:
+                    await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32000,
+                                                                                       "message": "Hub internal error during agent communication: Unhandled exception in forwarder task."}))
+                except Exception as e_send_q_err:
+                    logger.error(
+                        f"MCP Stream {stream_id}: FAILED to put generic error on send_queue for MCP ID {client_mcp_req_id}: {e_send_q_err}",
+                        exc_info=True)
             finally:
                 if client_mcp_req_id is not None and str(client_mcp_req_id) in pending_tasks:
                     del pending_tasks[str(client_mcp_req_id)]
+                    if not pending_tasks and reader_task_finished_event.is_set():  # Check reader_task_finished_event too
+                        outstanding_responses_event.set()
                 logger.info(
-                    f"MCP Stream {stream_id}: Exiting forward_and_process_agent_response for MCP ID {client_mcp_req_id}")
+                    f"MCP Stream {stream_id}: EXITING forward_and_process_agent_response for MCP ID {client_mcp_req_id}"
+                )
 
+        # --- NESTED HELPER FUNCTION: process_mcp_request ---
         async def process_mcp_request(req_data: Dict[str, Any]):
+            # Implicitly uses: stream_id, send_queue, storage_inst, agent_http_client,
+            #                  pending_tasks, outstanding_responses_event, background_notifications
             try:
                 mcp_req = MCPRequestModel(**req_data)
             except ValidationError as e_val:
@@ -1003,7 +1016,6 @@ async def mcp_stream_handler(
             logger.info(f"MCP Stream {stream_id}: RECV: {mcp_req.method} (ID: {mcp_req.id}) Params: {mcp_req.params}")
 
             if mcp_req.method == "initialize":
-                # ... (initialize logic as before) ...
                 client_info = mcp_req.params.get("clientInfo", {}) if mcp_req.params and isinstance(mcp_req.params,
                                                                                                     dict) else {}
                 logger.info(
@@ -1016,14 +1028,13 @@ async def mcp_stream_handler(
                                    "serverInfo": {"name": "AIRA Hub", "version": "1.0.0"},
                                    "capabilities": hub_capabilities}
                 await send_queue.put(MCPResponseModel(id=mcp_req.id, result=response_params))
-                return
+                # No immediate return here, let the function complete.
 
             elif mcp_req.method == "notifications/initialized":
                 logger.info(f"MCP Stream {stream_id}: Client acknowledged initialization.")
-                return
+                # No immediate return here.
 
             elif mcp_req.method == "tools/list" or mcp_req.method == "mcp.discoverTools":
-                # ... (tools/list logic as before) ...
                 hub_tools_list = await storage_inst.list_tools()
                 mcp_tool_definitions = []
                 for hub_tool in hub_tools_list:
@@ -1032,14 +1043,13 @@ async def mcp_stream_handler(
                     if hub_tool.get("annotations"): tool_def["annotations"] = hub_tool.get("annotations")
                     mcp_tool_definitions.append(tool_def)
                 await send_queue.put(MCPResponseModel(id=mcp_req.id, result={"tools": mcp_tool_definitions}))
-                return
+                # No immediate return.
 
             elif mcp_req.method == "resources/list":
-                # ... (resources/list logic as before) ...
                 registered_agents = await storage_inst.list_agents()
                 mcp_resources = []
-                for agent_reg in registered_agents:  # Renamed to avoid conflict
-                    resource_uri = f"aira-hub://agent/{agent_reg.agent_id}"  # Use agent_reg
+                for agent_reg in registered_agents:
+                    resource_uri = f"aira-hub://agent/{agent_reg.agent_id}"
                     resource_def = {"uri": resource_uri,
                                     "description": f"AIRA Agent: {agent_reg.name} ({agent_reg.status.value}) - {agent_reg.description or ''}",
                                     "metadata": {"agent_id": agent_reg.agent_id, "name": agent_reg.name,
@@ -1054,30 +1064,30 @@ async def mcp_stream_handler(
                                                                                      timezone.utc).isoformat() if agent_reg.last_seen else None}}
                     mcp_resources.append(resource_def)
                 await send_queue.put(MCPResponseModel(id=mcp_req.id, result={"resources": mcp_resources}))
-                return
+                # No immediate return.
 
             elif mcp_req.method == "prompts/list":
                 await send_queue.put(MCPResponseModel(id=mcp_req.id, result={"prompts": []}))
-                return
+                # No immediate return.
 
             elif mcp_req.method == "tools/call":
-                if mcp_req.id is None:  # Notification
+                if mcp_req.id is None:
                     logger.warning(f"MCP Stream {stream_id}: Received tools/call notification (no ID). Ignoring.")
-                    return
+                    return  # OK to return for unhandled notifications
+
                 if not isinstance(mcp_req.params, dict):
                     await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32602,
                                                                                 "message": "Invalid params for tools/call"}))
-                    return
+                    return  # Error sent, can return
 
                 tool_name_to_call = mcp_req.params.get("name")
-                tool_arguments = mcp_req.params.get("arguments", {})  # Default to empty dict
+                tool_arguments = mcp_req.params.get("arguments", {})
 
                 if not tool_name_to_call or not isinstance(tool_name_to_call, str):
                     await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32602,
                                                                                 "message": "Invalid params: string 'name' is required"}))
-                    return
+                    return  # Error sent
 
-                # Fetch the agent that provides this tool AND the tool's specific definition
                 agent_provider = await storage_inst.get_agent_by_tool(tool_name_to_call)
                 mcp_tool_definition_from_db = None
                 if agent_provider:
@@ -1091,11 +1101,10 @@ async def mcp_stream_handler(
                         f"MCP Stream {stream_id}: Tool '{tool_name_to_call}' or its provider agent not found/offline.")
                     await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32601,
                                                                                 "message": f"Tool not found or agent unavailable: {tool_name_to_call}"}))
-                    return
+                    return  # Error sent
 
                 annotations = mcp_tool_definition_from_db.annotations or {}
                 bridge_type = annotations.get("aira_bridge_type")
-
                 payload_for_downstream_agent: Dict[str, Any]
                 actual_downstream_target_url: Optional[str] = None
                 is_a2a_call = False
@@ -1103,38 +1112,26 @@ async def mcp_stream_handler(
                 if bridge_type == "a2a":
                     is_a2a_call = True
                     a2a_skill_id = annotations.get("aira_a2a_target_skill_id")
-                    actual_downstream_target_url = annotations.get(
-                        "aira_a2a_agent_url")  # This is the A2A agent's base URL
-
+                    actual_downstream_target_url = annotations.get("aira_a2a_agent_url")
                     if not a2a_skill_id or not actual_downstream_target_url:
                         logger.error(
-                            f"MCP Stream {stream_id}: Misconfigured A2A bridge for tool '{tool_name_to_call}'. Missing skill_id or agent_url in annotations.")
+                            f"MCP Stream {stream_id}: Misconfigured A2A bridge for tool '{tool_name_to_call}'.")
                         await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32002,
                                                                                     "message": "Hub A2A bridge misconfiguration"}))
                         return
-
                     a2a_data_part_payload = {"skill_id": a2a_skill_id}
-                    # Map MCP arguments to A2A skill's expected parameters
-                    # For "general_conversation", it expects "user_input" and optionally "a2a_task_id_override"
-                    if "user_input" in tool_arguments:
-                        a2a_data_part_payload["user_input"] = tool_arguments["user_input"]
-                    if "a2a_task_id_override" in tool_arguments:
-                        a2a_data_part_payload["a2a_task_id_override"] = tool_arguments["a2a_task_id_override"]
-                    # If the A2A skill directly expected the MCP args, you would do:
-                    # a2a_data_part_payload.update(tool_arguments)
-
-                    payload_for_downstream_agent = {  # This is the A2A JSON-RPC request
-                        "jsonrpc": "2.0",
-                        "id": str(uuid.uuid4()),  # Independent JSON-RPC ID for the A2A call
-                        "method": "tasks/send",
-                        "params": {
-                            "id": str(mcp_req.id),  # Use original MCP req ID as A2A Task ID for correlation
-                            "message": {"role": "user", "parts": [{"type": "data", "data": a2a_data_part_payload}]}
-                        }
+                    if "user_input" in tool_arguments: a2a_data_part_payload["user_input"] = tool_arguments[
+                        "user_input"]
+                    if "a2a_task_id_override" in tool_arguments: a2a_data_part_payload["a2a_task_id_override"] = \
+                    tool_arguments["a2a_task_id_override"]
+                    payload_for_downstream_agent = {
+                        "jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "tasks/send",
+                        "params": {"id": str(mcp_req.id), "message": {"role": "user", "parts": [
+                            {"type": "data", "data": a2a_data_part_payload}]}}
                     }
-                elif agent_provider.stdio_command:  # Handling stdio *before* generic MCP HTTP
+                elif agent_provider.stdio_command:
                     logger.warning(
-                        f"MCP Stream {stream_id}: Tool '{tool_name_to_call}' on stdio agent '{agent_provider.name}'. Hub cannot proxy. Client must handle.")
+                        f"MCP Stream {stream_id}: Tool '{tool_name_to_call}' on stdio agent '{agent_provider.name}'. Hub cannot proxy.")
                     error_data = {"message": f"Tool '{tool_name_to_call}' is on a local stdio agent.",
                                   "agent_name": agent_provider.name, "agent_url": agent_provider.url,
                                   "command": agent_provider.stdio_command}
@@ -1142,7 +1139,7 @@ async def mcp_stream_handler(
                                                                                 "message": "Local stdio execution required",
                                                                                 "data": error_data}))
                     return
-                else:  # Default to direct MCP call (HTTP/Streamable)
+                else:
                     is_a2a_call = False
                     actual_downstream_target_url = agent_provider.mcp_url or agent_provider.mcp_stream_url
                     if not actual_downstream_target_url:
@@ -1151,53 +1148,44 @@ async def mcp_stream_handler(
                         await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32001,
                                                                                     "message": "Agent endpoint misconfiguration"}))
                         return
-
-                    payload_for_downstream_agent = MCPRequestModel(  # This is an MCP JSON-RPC request
-                        method="tools/call",  # Standard MCP way to call a tool on an MCP agent
+                    payload_for_downstream_agent = MCPRequestModel(
+                        method="tools/call",
                         params={"name": tool_name_to_call, "arguments": tool_arguments},
-                        id=str(uuid.uuid4())  # Agent should ideally echo the ID it receives if it's a full MCP server
-                        # Or we use client_mcp_req_id when constructing the final response
+                        id=str(uuid.uuid4())
                     ).model_dump(exclude_none=True)
 
-                if not actual_downstream_target_url:  # Should be caught by specific cases above
-                    logger.error(f"MCP Stream {stream_id}: Catastrophic: Target URL for '{tool_name_to_call}' is None.")
+                if not actual_downstream_target_url:
+                    logger.error(
+                        f"MCP Stream {stream_id}: Catastrophic: Target URL for '{tool_name_to_call}' is None after logic.")
                     await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32000,
                                                                                 "message": "Internal Hub Error: Target URL undefined"}))
                     return
 
                 task = asyncio.create_task(
-                    forward_and_process_agent_response(  # Call the renamed/refactored function
+                    forward_and_process_agent_response(
                         client_mcp_req_id=mcp_req.id,
                         agent_target_url=actual_downstream_target_url,
-                        payload_to_agent=payload_for_downstream_agent,  # This is now always a dict
+                        payload_to_agent=payload_for_downstream_agent,
                         agent_name_for_log=agent_provider.name,
-                        is_a2a_bridged=is_a2a_call,
-                        # Pass the necessary scope variables for the helper
-                        stream_id=stream_id,
-                        send_queue=send_queue,
-                        pending_tasks=pending_tasks,
-                        agent_http_client=agent_http_client  # Pass the client from outer scope
+                        is_a2a_bridged=is_a2a_call
                     )
                 )
                 pending_tasks[str(mcp_req.id)] = task
-                return
+                outstanding_responses_event.clear()  # We now expect a response
+                # No return for requests with ID
 
-            # Fallback for non-standard methods (direct tool call if agent supports it)
-            # This part is less standard for MCP and should ideally be phased out
-            # in favor of all tool invocations using `tools/call`.
-            else:  # if mcp_req.method is not a standard MCP one
+            else:  # Non-standard method
                 tool_name_direct = mcp_req.method
                 logger.warning(
                     f"MCP Stream {stream_id}: Non-standard method '{tool_name_direct}'. Attempting as direct tool/method call.")
-                agent_direct = await storage_inst.get_agent_by_tool(
-                    tool_name_direct)  # Assumes direct method is listed as a tool
+                agent_direct = await storage_inst.get_agent_by_tool(tool_name_direct)
 
                 if not agent_direct:
                     logger.warning(f"MCP Stream {stream_id}: Agent for direct method '{tool_name_direct}' not found.")
                     if mcp_req.id is not None:
                         await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32601,
                                                                                     "message": f"Method not found: {tool_name_direct}"}))
-                    return
+                    return  # Error sent or notification not found
 
                 target_url_direct = agent_direct.mcp_url or agent_direct.mcp_stream_url
                 if not target_url_direct:
@@ -1206,38 +1194,38 @@ async def mcp_stream_handler(
                     if mcp_req.id is not None:
                         await send_queue.put(MCPResponseModel(id=mcp_req.id, error={"code": -32001,
                                                                                     "message": "Agent endpoint misconfiguration for direct call"}))
-                    return
+                    return  # Error sent or notification misconfigured
 
-                # Construct a payload assuming the agent handles the method name directly
-                # The payload sent to the agent IS the original MCPRequestModel dict
                 payload_for_direct_agent = mcp_req.model_dump(exclude_none=True)
 
-                if mcp_req.id is not None:  # It's a request expecting a response
+                if mcp_req.id is not None:
                     task_direct = asyncio.create_task(
                         forward_and_process_agent_response(
                             client_mcp_req_id=mcp_req.id,
                             agent_target_url=target_url_direct,
-                            payload_to_agent=payload_for_direct_agent,  # Send the dict
+                            payload_to_agent=payload_for_direct_agent,
                             agent_name_for_log=agent_direct.name,
-                            is_a2a_bridged=False,  # Assuming direct method calls are not A2A bridged
-                            stream_id=stream_id,
-                            send_queue=send_queue,
-                            pending_tasks=pending_tasks,
-                            agent_http_client=agent_http_client
+                            is_a2a_bridged=False
                         )
                     )
                     pending_tasks[str(mcp_req.id)] = task_direct
+                    outstanding_responses_event.clear()
+                    # No return for requests with ID
                 else:  # It's a notification
                     logger.info(
                         f"MCP Stream {stream_id}: Forwarding direct notification '{mcp_req.method}' to agent {agent_direct.name}")
-                    asyncio.create_task(agent_http_client.post(target_url_direct, json=payload_for_direct_agent))
-                return
+                    bg_notify_task = asyncio.create_task(
+                        agent_http_client.post(target_url_direct, json=payload_for_direct_agent))
+                    background_notifications.append(bg_notify_task)
+                    # No immediate return for notifications either, let process_mcp_request complete.
+                    # A 'return' here is only needed if this is the absolute end of processing for this message.
 
-        # --- Main Request Processing Loop from Client Stream ---
+        # --- NESTED HELPER FUNCTION: read_from_client ---
         async def read_from_client():
+            # Implicitly uses: request_stream, stream_id, send_queue, process_mcp_request
             buffer = b""
             try:
-                async for chunk in request_stream:  # From FastAPI request
+                async for chunk in request_stream:
                     if not chunk: continue
                     logger.debug(f"MCP Stream {stream_id}: Raw chunk from client: {chunk!r}")
                     buffer += chunk
@@ -1246,10 +1234,10 @@ async def mcp_stream_handler(
                         if message_bytes.strip():
                             try:
                                 req_data = json.loads(message_bytes.decode('utf-8'))
-                                if isinstance(req_data, list):  # Batch
+                                if isinstance(req_data, list):
                                     for item in req_data:
                                         if isinstance(item, dict): await process_mcp_request(item)
-                                elif isinstance(req_data, dict):  # Single
+                                elif isinstance(req_data, dict):
                                     await process_mcp_request(req_data)
                                 else:
                                     logger.warning(
@@ -1285,52 +1273,129 @@ async def mcp_stream_handler(
             finally:
                 logger.info(f"MCP Stream {stream_id}: Client reader task finally block.")
 
-        # --- Main Handler Logic ---
+        # --- NESTED HELPER FUNCTION: read_from_client_wrapper ---
+        async def read_from_client_wrapper():
+            # Implicitly uses: read_from_client, stream_id, pending_tasks, reader_task_finished_event, outstanding_responses_event
+            try:
+                await read_from_client()
+            except asyncio.CancelledError:
+                logger.info(f"MCP Stream {stream_id}: read_from_client_wrapper: Reader task cancelled.")
+                # Do not set events here, let the main handler's cancellation propagate
+                raise  # Re-raise to be caught by main handler's try/except asyncio.CancelledError
+            except Exception as e:
+                logger.error(f"MCP Stream {stream_id}: read_from_client_wrapper: Error in reader: {e}", exc_info=True)
+            finally:
+                logger.info(f"MCP Stream {stream_id}: read_from_client_wrapper: Reader finished. Signalling.")
+                reader_task_finished_event.set()
+                if not pending_tasks:  # If no tasks were ever created or all are done
+                    outstanding_responses_event.set()
+
+        # --- Start of mcp_stream_handler main logic ---
+        reader_main_task = asyncio.create_task(read_from_client_wrapper())
+
         try:
-            if initial_messages:  # Process any messages that came in the initial POST body
+            if initial_messages:
                 logger.debug(f"MCP Stream {stream_id}: Processing {len(initial_messages)} initial POSTed messages.")
+                active_requests_in_initial = 0
                 for msg_data in initial_messages:
                     if isinstance(msg_data, dict) and msg_data.get("jsonrpc") == "2.0":
+                        if msg_data.get("id") is not None:
+                            active_requests_in_initial += 1
+                            outstanding_responses_event.clear()
                         await process_mcp_request(msg_data)
-                    else:  # If initial POST was not valid JSON-RPC, send error and close
+                    elif isinstance(msg_data, dict) and msg_data.get(
+                            "error"):  # If it was an error from initial parsing
+                        await send_queue.put(MCPResponseModel(**msg_data))
+                    else:
                         logger.warning(
                             f"MCP Stream {stream_id}: Invalid initial non-JSONRPC message in POST: {msg_data}")
-                        if msg_data.get("id") is not None:  # Try to get an ID if it was a single malformed obj
-                            await send_queue.put(MCPResponseModel(id=msg_data.get("id"), error={"code": -32600,
-                                                                                                "message": "Invalid initial request"}))
-                        # No good way to respond to malformed batch or non-object initial body via stream
-                        # This case should have been caught by FastAPI/Pydantic before handler
-                        # or mcp_stream_endpoint initial body parsing.
-                        # If we reach here with bad initial_messages, it's likely from the direct error construction.
-                        if msg_data.get("error"):  # If it was constructed as an error response
-                            await send_queue.put(MCPResponseModel(**msg_data))
+                        # Error already handled by mcp_stream_endpoint if it was from initial body parsing
+                        # This else might be for other unexpected formats not caught earlier.
+                        # If an ID is present, try to use it for the error response.
+                        error_id_initial = msg_data.get("id") if isinstance(msg_data, dict) else None
+                        await send_queue.put(MCPResponseModel(id=error_id_initial, error={"code": -32600,
+                                                                                          "message": "Invalid initial request structure"}))
 
-            reader_task = asyncio.create_task(read_from_client())
-            pending_tasks[f"reader_{stream_id}"] = reader_task  # Track the reader
-            logger.debug(f"MCP Stream {stream_id}: Client reader task started.")
+                if active_requests_in_initial == 0 and not any(msg.get("id") is not None for msg in initial_messages if
+                                                               isinstance(msg, dict)):  # Re-check if any had IDs
+                    outstanding_responses_event.set()
 
-            await reader_task  # Wait for client to close its send stream or for an error
+            while not (reader_task_finished_event.is_set() and outstanding_responses_event.is_set()):
+                all_managed_tasks = [reader_main_task] + list(pending_tasks.values()) + background_notifications
+                # Filter out already done tasks for the wait
+                tasks_to_wait_on = [t for t in all_managed_tasks if t and not t.done()]
+
+                # Add event waits
+                event_waits = [reader_task_finished_event.wait(), outstanding_responses_event.wait()]
+
+                if not tasks_to_wait_on and not event_waits:  # Should not happen if loop condition is true
+                    logger.warning(
+                        f"MCP Stream {stream_id}: Loop condition true but no tasks or events to wait on. Breaking.")
+                    break
+
+                wait_for_these = tasks_to_wait_on + event_waits
+
+                logger.debug(
+                    f"MCP Stream {stream_id}: Main loop waiting. Reader done: {reader_task_finished_event.is_set()}, Outstanding responses done: {outstanding_responses_event.is_set()}, Pending tasks: {len(pending_tasks)}")
+
+                done, pending = await asyncio.wait(
+                    wait_for_these,
+                    timeout=1.0,  # Periodically check conditions
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if reader_task_finished_event.is_set() and not pending_tasks:
+                    outstanding_responses_event.set()  # All conditions met to exit loop
+
+                # Handle tasks that completed if necessary (e.g., log errors from background_notifications)
+                for task in done:
+                    if task in background_notifications and task.done() and task.exception():
+                        logger.error(f"MCP Stream {stream_id}: Background notification task failed: {task.exception()}",
+                                     exc_info=task.exception())
+                        background_notifications.remove(task)
+
+            logger.info(
+                f"MCP Stream {stream_id}: Loop exited. Reader finished: {reader_task_finished_event.is_set()}, All responses handled: {outstanding_responses_event.is_set()}."
+            )
 
         except asyncio.CancelledError:
-            logger.info(f"MCP Stream {stream_id}: Main handler task cancelled.")
+            logger.info(f"MCP Stream {stream_id}: Main handler task was cancelled.")
+            if reader_main_task and not reader_main_task.done():
+                reader_main_task.cancel()
         except Exception as e_handler:
             logger.error(f"MCP Stream {stream_id}: Unhandled error in MCP stream main handler: {e_handler}",
                          exc_info=True)
+            if reader_main_task and not reader_main_task.done():
+                reader_main_task.cancel()
             try:
                 await send_queue.put(
                     MCPResponseModel(id=None, error={"code": -32000, "message": "Hub internal stream error"}))
-            except:
-                pass
+            except Exception:
+                pass  # Avoid error in error handling
         finally:
-            logger.info(f"MCP Stream {stream_id}: Main handler cleanup. Cancelling {len(pending_tasks)} tasks.")
-            for task_id, task_obj in list(pending_tasks.items()):  # Iterate over a copy
+            logger.info(
+                f"MCP Stream {stream_id}: Main handler FINAL cleanup. Cancelling {len(pending_tasks)} outstanding client-response tasks + {len(background_notifications)} background notification tasks.")
+
+            all_tasks_to_cancel = list(pending_tasks.values()) + \
+                                  [t for t in background_notifications if t and not t.done()]
+            if reader_main_task and not reader_main_task.done():
+                all_tasks_to_cancel.append(reader_main_task)
+
+            for task_obj in all_tasks_to_cancel:
                 if not task_obj.done():
                     task_obj.cancel()
-            if pending_tasks:
-                await asyncio.gather(*pending_tasks.values(), return_exceptions=True)
 
-            await agent_http_client.aclose()  # Close the shared client for this stream handler
-            await send_queue.put(None)  # Signal response_generator to end
+            if all_tasks_to_cancel:
+                logger.debug(f"MCP Stream {stream_id}: Gathering {len(all_tasks_to_cancel)} tasks for cancellation.")
+                await asyncio.gather(*all_tasks_to_cancel, return_exceptions=True)
+                logger.debug(f"MCP Stream {stream_id}: Gathered cancelled tasks.")
+
+            # agent_http_client is closed by the async with block when mcp_stream_handler exits
+            try:
+                await send_queue.put(None)  # Signal response_generator to end
+            except Exception as e_final_q:
+                logger.error(f"MCP Stream {stream_id}: Error putting None sentinel on send_queue: {e_final_q}")
+
             if app_state and hasattr(app_state, 'active_mcp_streams') and stream_id in app_state.active_mcp_streams:
                 del app_state.active_mcp_streams[stream_id]
             logger.info(f"MCP Stream {stream_id}: Handler fully cleaned up.")
