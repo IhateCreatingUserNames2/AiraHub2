@@ -943,7 +943,8 @@ async def mcp_stream_handler(
                         f"MCP Stream {stream_id}: Result for MCP ID {client_mcp_req_id} is not a list before sending. Type: {type(mcp_result_payload_for_client)}. Wrapping into text.")
                     mcp_result_payload_for_client = [{"type": "text", "text": json.dumps(
                         mcp_result_payload_for_client) if mcp_result_payload_for_client is not None else "No specific result content."}]
-
+                logger.info(
+                    f"MCP Stream {stream_id}: PREPARING TO PUT response for ID {client_mcp_req_id} on send_queue. Queue size approx: {send_queue.qsize()}")
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, result=mcp_result_payload_for_client))
                 logger.info(
                     f"MCP Stream {stream_id}: Successfully queued MCPResponseModel for MCP ID {client_mcp_req_id} to client.")
@@ -1402,10 +1403,13 @@ async def mcp_stream_handler(
                 logger.debug(f"MCP Stream {stream_id}: Gathering {len(all_tasks_to_cancel)} tasks for cancellation.")
                 await asyncio.gather(*all_tasks_to_cancel, return_exceptions=True)
                 logger.debug(f"MCP Stream {stream_id}: Gathered cancelled tasks.")
-
+            logger.info(
+                f"MCP Stream {stream_id}: PREPARING TO PUT None sentinel on send_queue. Queue size approx: {send_queue.qsize()}")
             # agent_http_client is closed by the async with block when mcp_stream_handler exits
             try:
                 await send_queue.put(None)  # Signal response_generator to end
+                logger.info(
+                    f"MCP Stream {stream_id}: Successfully PUT None sentinel on send_queue. Queue size approx: {send_queue.qsize()}")
             except Exception as e_final_q:
                 logger.error(f"MCP Stream {stream_id}: Error putting None sentinel on send_queue: {e_final_q}")
 
@@ -2061,8 +2065,12 @@ async def mcp_stream_endpoint(
     async def response_generator():
         try:
             while True:
+                logger.debug(
+                    f"MCP Stream {stream_id}: response_generator WAITING for item from send_queue. Queue size approx: {send_queue.qsize()}")
                 logger.debug(f"MCP Stream {stream_id}: response_generator WAITING for item from send_queue")
                 item = await send_queue.get()
+                logger.debug(
+                    f"MCP Stream {stream_id}: response_generator GOT item from send_queue. Type: {type(item)}. Item (first 150 chars): {str(item)[:150]}. Queue size approx after get: {send_queue.qsize()}")
                 logger.debug(
                     f"MCP Stream {stream_id}: response_generator GOT item from send_queue: {type(item)} - {str(item)[:100]}")
                 if item is None:
