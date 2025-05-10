@@ -876,7 +876,7 @@ async def mcp_stream_handler(
                     agent_target_url,
                     json=payload_to_agent,
                     headers=custom_headers,
-                    timeout=60.0  # Consider making this configurable
+                    timeout=180.0  # Consider making this configurable
                 )
                 response_text_debug = response_from_agent_http.text
                 logger.info(
@@ -981,28 +981,65 @@ async def mcp_stream_handler(
                     response_queued_successfully = True
 
 
-            except httpx.HTTPStatusError as e_http:
+
+            except httpx.HTTPStatusError as e_http:  # For 4xx/5xx responses
+
                 logger.error(
                     f"MCP Stream {stream_id}: Agent HTTPStatusError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}': {e_http.response.status_code} - Resp: {response_text_debug[:500]}",
                     exc_info=True)
+
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32003,
                                                                                    "message": f"Agent error: {e_http.response.status_code}",
                                                                                    "data": response_text_debug[:500]}))
+
                 response_queued_successfully = True
-            except httpx.Timeout as e_timeout:
+
+                # Catch specific timeouts first
+
+            except httpx.ConnectTimeout as e_connect_timeout:
+
                 logger.error(
-                    f"MCP Stream {stream_id}: Timeout calling agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_timeout}",
+                    f"MCP Stream {stream_id}: ConnectTimeout calling agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_connect_timeout}",
                     exc_info=True)
+
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
-                                                                                   "message": f"Agent call timed out: {type(e_timeout).__name__}"}))
+                                                                                   "message": f"Agent connection timed out: {type(e_connect_timeout).__name__}"}))
+
                 response_queued_successfully = True
-            except httpx.RequestError as e_req:  # Covers ConnectError, ReadError etc.
+
+            except httpx.ReadTimeout as e_read_timeout:
+
+                logger.error(
+                    f"MCP Stream {stream_id}: ReadTimeout from agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_read_timeout}",
+                    exc_info=True)
+
+                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
+                                                                                   "message": f"Agent read timed out: {type(e_read_timeout).__name__}"}))
+
+                response_queued_successfully = True
+
+            except httpx.Timeout as e_general_timeout:  # Catch any other httpx.Timeout
+
+                logger.error(
+                    f"MCP Stream {stream_id}: General Timeout with agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_general_timeout}",
+                    exc_info=True)
+
+                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
+                                                                                   "message": f"Agent operation timed out: {type(e_general_timeout).__name__}"}))
+
+                response_queued_successfully = True
+
+            except httpx.RequestError as e_req:  # Catch other network errors (like NameResolutionError, etc.)
+
                 logger.error(
                     f"MCP Stream {stream_id}: Agent httpx.RequestError for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
                     exc_info=True)
+
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
                                                                                    "message": f"Agent communication error: {type(e_req).__name__}"}))
+
                 response_queued_successfully = True
+
             except json.JSONDecodeError as e_json_dec:
                 logger.error(
                     f"MCP Stream {stream_id}: Agent JSONDecodeError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}'. Resp: {response_text_debug[:500]}",
