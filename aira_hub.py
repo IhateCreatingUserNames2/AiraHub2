@@ -949,55 +949,100 @@ async def mcp_stream_handler(
                 logger.info(
                     f"MCP Stream {stream_id}: Successfully queued MCPResponseModel for MCP ID {client_mcp_req_id} to client.")
 
-            except httpx.HTTPStatusError as e_http:
+
+            except httpx.HTTPStatusError as e_http:  # Handles 4xx/5xx
+
                 logger.error(
+
                     f"MCP Stream {stream_id}: Agent HTTPStatusError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}': {e_http.response.status_code} - Response: {response_text_debug[:500]}",
+
                     exc_info=True
+
                 )
+
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32003,
+
                                                                                    "message": f"Agent error: {e_http.response.status_code}",
+
                                                                                    "data": response_text_debug[:500]}))
-            except httpx.Timeout as e_timeout:
+
+                # CATCH httpx.RequestError (parent of Timeout exceptions) FIRST
+
+            except httpx.RequestError as e_req:  # Catches ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout etc.
+
                 logger.error(
-                    f"MCP Stream {stream_id}: Timeout calling agent '{agent_name_for_log}' for MCP ID {client_mcp_req_id}: {e_timeout}",
+
+                    f"MCP Stream {stream_id}: Agent httpx.RequestError (likely timeout or connection issue) for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
+
                     exc_info=True
+
                 )
-                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
-                                                                                   "message": f"Agent call timed out: {type(e_timeout).__name__}"}))
-            except httpx.RequestError as e_req:
-                logger.error(
-                    f"MCP Stream {stream_id}: Agent httpx.RequestError for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_req).__name__} - {e_req}",
-                    exc_info=True
-                )
-                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32004,
-                                                                                   "message": f"Agent communication error: {type(e_req).__name__}"}))
+
+                error_code = -32004  # General communication error
+
+                error_message = f"Agent communication error: {type(e_req).__name__}"
+
+                if isinstance(e_req, httpx.Timeout):  # More specific message if it's a timeout
+
+                    error_message = f"Agent call timed out: {type(e_req).__name__}"
+
+                await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": error_code,
+
+                                                                                   "message": error_message}))
+
             except json.JSONDecodeError as e_json_dec:
+
                 logger.error(
+
                     f"MCP Stream {stream_id}: Agent JSONDecodeError for MCP ID {client_mcp_req_id} from '{agent_name_for_log}'. Response text: {response_text_debug[:500]}",
+
                     exc_info=True
+
                 )
+
                 await send_queue.put(MCPResponseModel(id=client_mcp_req_id,
+
                                                       error={"code": -32005, "message": "Agent response parse error",
+
                                                              "data": str(e_json_dec)}))
-            except Exception as e_fwd_generic:
+
+            except Exception as e_fwd_generic:  # Catch-all for this try block
+
                 logger.error(
+
                     f"MCP Stream {stream_id}: GENERIC UNHANDLED EXCEPTION in forward_and_process_agent_response for MCP ID {client_mcp_req_id} to '{agent_name_for_log}': {type(e_fwd_generic).__name__} - {e_fwd_generic}",
+
                     exc_info=True
+
                 )
+
                 try:
+
                     await send_queue.put(MCPResponseModel(id=client_mcp_req_id, error={"code": -32000,
+
                                                                                        "message": "Hub internal error during agent communication: Unhandled exception in forwarder task."}))
+
                 except Exception as e_send_q_err:
+
                     logger.error(
+
                         f"MCP Stream {stream_id}: FAILED to put generic error on send_queue for MCP ID {client_mcp_req_id}: {e_send_q_err}",
+
                         exc_info=True)
+
             finally:
+
                 if client_mcp_req_id is not None and str(client_mcp_req_id) in pending_tasks:
+
                     del pending_tasks[str(client_mcp_req_id)]
-                    if not pending_tasks and reader_task_finished_event.is_set():  # Check reader_task_finished_event too
+
+                    if not pending_tasks and reader_task_finished_event.is_set():
                         outstanding_responses_event.set()
+
                 logger.info(
+
                     f"MCP Stream {stream_id}: EXITING forward_and_process_agent_response for MCP ID {client_mcp_req_id}"
+
                 )
 
         # --- NESTED HELPER FUNCTION: process_mcp_request ---
