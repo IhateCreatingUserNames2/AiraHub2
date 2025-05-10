@@ -4,12 +4,31 @@ A modular system for integrating local MCP (Model Context Protocol) servers with
 #
 
 
-Claude Example Connecting to AI Agent 
+
 
 https://airahub2.onrender.com/
 
+How to Connect to Aira Hub Using Claude 
+
+Claude Json Config:
+
+{
+  "mcpServers": {
+    "aira-hub": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+
+        "https://airahub2.onrender.com/mcp/stream"
+
+      ]
+    }
+  }
+}
 
 
+
+Claude Example Connecting to LAIN ( Google ADK AI AGENT)   https://github.com/IhateCreatingUserNames2/Lain 
  ![image](https://github.com/user-attachments/assets/082459bb-d8b8-4a9f-b2d7-4483f235b393)
 
 
