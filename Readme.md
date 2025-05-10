@@ -1,6 +1,6 @@
 # AIRA Hub & Agent Manager
 
-[![AIRA Hub Status](https://img.shields.io/website?up_message=online&label=AIRA%20Hub%20Status&up_message=online&url=https%3A%2F%2Fairahub2.onrender.com%2Fhealth)](https://airahub2.onrender.com/status)
+[![AIRA Hub Status](https://img.shields.io/website?down_message=online&label=AIRA%20Hub%20Status&up_message=online&url=https%3A%2F%2Fairahub2.onrender.com%2Fhealth)](https://airahub2.onrender.com/status)
 
 **AIRA Hub (Active Instance): [https://airahub2.onrender.com/](https://airahub2.onrender.com/)**
 
