@@ -2061,8 +2061,10 @@ async def mcp_stream_endpoint(
     async def response_generator():
         try:
             while True:
+                logger.debug(f"MCP Stream {stream_id}: response_generator WAITING for item from send_queue")
                 item = await send_queue.get()
-
+                logger.debug(
+                    f"MCP Stream {stream_id}: response_generator GOT item from send_queue: {type(item)} - {str(item)[:100]}")
                 if item is None:
                     logger.info(f"MCP Stream {stream_id}: Closing response generator (received None sentinel)")
                     break
