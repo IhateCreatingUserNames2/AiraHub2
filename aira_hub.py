@@ -876,7 +876,7 @@ async def mcp_stream_handler(
                     agent_target_url,
                     json=payload_to_agent,
                     headers=custom_headers,
-                    timeout=180.0  # Consider making this configurable
+                    timeout=1800.0  # Consider making this configurable
                 )
                 response_text_debug = response_from_agent_http.text
                 logger.info(
