@@ -3,9 +3,12 @@
 A modular system for integrating local MCP (Model Context Protocol) servers with a central registry to enable AI assistants like Claude to leverage local tools.
 #
 
-*** TO DO
----- Check A2A
----- Create Google ADK A2A Agents with Tools and BroadCast them in Aira , Retrieve and use Tools in MCP client(Claude) 
+
+Claude Example Connecting to AI Agent 
+
+https://airahub2.onrender.com/
+
+ ![image](https://github.com/user-attachments/assets/082459bb-d8b8-4a9f-b2d7-4483f235b393)
 
 
 
