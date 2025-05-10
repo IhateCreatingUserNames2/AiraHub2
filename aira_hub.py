@@ -1385,33 +1385,38 @@ async def mcp_stream_handler(
                     MCPResponseModel(id=None, error={"code": -32000, "message": "Hub internal stream error"}))
             except Exception:
                 pass  # Avoid error in error handling
-        finally:
-            logger.info(
-                f"MCP Stream {stream_id}: Main handler FINAL cleanup. Cancelling {len(pending_tasks)} outstanding client-response tasks + {len(background_notifications)} background notification tasks.")
+            finally:
+                logger.info(
+                    f"MCP Stream {stream_id}: Main handler FINAL cleanup. Cancelling {len(pending_tasks)} outstanding client-response tasks + {len(background_notifications)} background notification tasks.")
 
-            all_tasks_to_cancel = list(pending_tasks.values()) + \
-                                  [t for t in background_notifications if t and not t.done()]
-            if reader_main_task and not reader_main_task.done():
-                all_tasks_to_cancel.append(reader_main_task)
+                all_tasks_to_ensure_completion = []  # Renamed for clarity
+                if reader_main_task and not reader_main_task.done():
+                    reader_main_task.cancel()
+                    all_tasks_to_ensure_completion.append(reader_main_task)
 
-            for task_obj in all_tasks_to_cancel:
-                if not task_obj.done():
-                    task_obj.cancel()
+                # Add pending_tasks and background_notifications to be awaited/cancelled
+                for task_collection in [list(pending_tasks.values()), list(background_notifications)]:
+                    for task_obj in task_collection:
+                        if task_obj and not task_obj.done():
+                            task_obj.cancel()
+                            all_tasks_to_ensure_completion.append(task_obj)
 
-            if all_tasks_to_cancel:
-                logger.debug(f"MCP Stream {stream_id}: Gathering {len(all_tasks_to_cancel)} tasks for cancellation.")
-                await asyncio.gather(*all_tasks_to_cancel, return_exceptions=True)
-                logger.debug(f"MCP Stream {stream_id}: Gathered cancelled tasks.")
+                if all_tasks_to_ensure_completion:
+                    logger.debug(
+                        f"MCP Stream {stream_id}: Main handler finally: Gathering {len(all_tasks_to_ensure_completion)} tasks for cancellation/completion.")
+                    # **** MOVE GATHER HERE - BEFORE PUTTING None ON QUEUE ****
+                    await asyncio.gather(*all_tasks_to_ensure_completion, return_exceptions=True)
+                    logger.debug(f"MCP Stream {stream_id}: Main handler finally: Gathered tasks.")
 
-            # agent_http_client is closed by the async with block when mcp_stream_handler exits
-            try:
-                await send_queue.put(None)  # Signal response_generator to end
-            except Exception as e_final_q:
-                logger.error(f"MCP Stream {stream_id}: Error putting None sentinel on send_queue: {e_final_q}")
+                # Now that other tasks are done, it's safer to signal the generator to end
+                try:
+                    await send_queue.put(None)  # Signal response_generator to end
+                except Exception as e_final_q:
+                    logger.error(f"MCP Stream {stream_id}: Error putting None sentinel on send_queue: {e_final_q}")
 
-            if app_state and hasattr(app_state, 'active_mcp_streams') and stream_id in app_state.active_mcp_streams:
-                del app_state.active_mcp_streams[stream_id]
-            logger.info(f"MCP Stream {stream_id}: Handler fully cleaned up.")
+                if app_state and hasattr(app_state, 'active_mcp_streams') and stream_id in app_state.active_mcp_streams:
+                    del app_state.active_mcp_streams[stream_id]
+                logger.info(f"MCP Stream {stream_id}: Handler fully cleaned up.")
 
 
 # ----- FASTAPI APP -----
