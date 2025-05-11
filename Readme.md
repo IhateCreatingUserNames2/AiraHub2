@@ -24,7 +24,7 @@ This project facilitates a powerful new way for AI agents to collaborate and ext
     *   Registers these local servers with a remote AIRA Hub instance, making their tools discoverable and usable by clients connected to the Hub.
     *   Requires a tunneling service (like ngrok or Cloudflare Tunnel) to expose itself to the AIRA Hub.
 
-3.  ** LAIN (`[Lain](https://github.com/IhateCreatingUserNames2/Lain)`)** (Optional, for AI Agents, This Example is An AI Agent made with google ADK using A2A protocol, broadcasting A2A Skills(Conversation in this example) thru the Aira HUB):
+3.  ** LAIN (https://github.com/IhateCreatingUserNames2/Lain)** (Optional, for AI Agents, This Example is An AI Agent made with google ADK using A2A protocol, broadcasting A2A Skills(Conversation in this example) thru the Aira HUB):
     *   Uses OpenRouter for LLM inference
 
 This architecture allows AI clients like Claude Desktop to seamlessly discover and utilize tools provided by various agents, including local processes running on your machine or specialized cloud-hosted agents, all through a unified AIRA Hub interface.
