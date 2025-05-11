@@ -18,13 +18,18 @@ This project facilitates a powerful new way for AI agents to collaborate and ext
     *   Supports A2A agent registration and translates A2A skills into MCP-compatible tools for broader accessibility.
     *   Utilizes MongoDB for persistent storage of agent registrations and task information.
 
-2.  **Agent Manager (`agent_manager.py`)** (Optional, for local stdio servers):
+2.  **Agent Manager (`agent_manager.py`)** (Optional, for local stdio servers, Example of How to Host an MCP Server and BroadCast it In Aira hub):
     *   A local service that runs on a user's machine or private network.
     *   Manages the lifecycle of local, stdio-based MCP servers (e.g., those run via `npx` or local Python scripts).
     *   Registers these local servers with a remote AIRA Hub instance, making their tools discoverable and usable by clients connected to the Hub.
     *   Requires a tunneling service (like ngrok or Cloudflare Tunnel) to expose itself to the AIRA Hub.
 
+3.  ** LAIN (`[Lain](https://github.com/IhateCreatingUserNames2/Lain)`)** (Optional, for AI Agents, This Example is An AI Agent made with google ADK using A2A protocol, broadcasting A2A Skills(Conversation in this example) thru the Aira HUB):
+    *   Uses OpenRouter for LLM inference
+
 This architecture allows AI clients like Claude Desktop to seamlessly discover and utilize tools provided by various agents, including local processes running on your machine or specialized cloud-hosted agents, all through a unified AIRA Hub interface.
+
+
 
 ## System Architecture
 Use code with caution.
