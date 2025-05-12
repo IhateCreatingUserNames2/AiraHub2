@@ -9,13 +9,33 @@
   "openapi": null,
   "api": [
     {
-      "url": "https://airahub2.onrender.com/mcp/stream",
-      "name": "getMcpStreamData",
-      "description": "Connect to Aira hub thru MCP STREAM",
-      "parameters": {
+      "url": "https://airahub2.onrender.com/mcp/stream", 
+      "name": "listAiraHubTools",
+      "description": "Retrieve a list of all available tools registered on the AiraHub network, including their names, descriptions, and input requirements.", 
+      "parameters": { 
         "type": "object",
         "properties": {},
         "required": []
+      }
+    },
+    {
+      "url": "https://airahub2.onrender.com/mcp/stream", 
+      "name": "callAiraHubTool", 
+      "description": "Execute a specific tool registered on the AiraHub network. You need to provide the exact tool name and any required arguments based on its input schema.", 
+      "parameters": { 
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact name of the tool to call (as listed by listAiraHubTools)."
+          },
+          "arguments": {
+            "type": "object",
+            "description": "An object containing the arguments required by the tool, matching its inputSchema.",
+            "additionalProperties": true 
+          }
+        },
+        "required": ["name", "arguments"] 
       }
     }
   ]
