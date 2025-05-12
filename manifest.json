@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "v1",
+  "identifier": "airahub",
+  "namespace": "AiraHub",
+  "version": "1.0",
+  "settings": null,
+  "gateway": null,
+  "ui": null,
+  "openapi": null,
+  "api": [
+    {
+      "url": "https://airahub2.onrender.com/mcp/stream",
+      "name": "getMcpStreamData",
+      "description": "Connect to Aira hub thru MCP STREAM",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  ]
+}
