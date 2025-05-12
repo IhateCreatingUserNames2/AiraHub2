@@ -6,7 +6,7 @@
 
 *** HTTP URL : https://airahub2.onrender.com/mcp/stream *** 
 
-A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop to discover and leverage a diverse ecosystem of tools and agents.
+A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop, Lobe-Chat, VSCODE or any other MCP Client to discover and leverage a diverse ecosystem of tools and agents.
 
 To test demo in claude use the Json or edit your Json.  https://github.com/IhateCreatingUserNames2/AiraHub2/blob/main/claude_desktop_config.json 
 
