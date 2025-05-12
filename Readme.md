@@ -4,9 +4,21 @@
 
 **AIRA Hub (Active Instance): [https://airahub2.onrender.com/](https://airahub2.onrender.com/)**
 
+*** HTTP URL : https://airahub2.onrender.com/mcp/stream *** 
+
 A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop to discover and leverage a diverse ecosystem of tools and agents.
 
 To test demo in claude use the Json or edit your Json.  https://github.com/IhateCreatingUserNames2/AiraHub2/blob/main/claude_desktop_config.json 
+
+
+Lobe-Chat Demo : 
+
+![image](https://github.com/user-attachments/assets/54120dc2-83a3-462d-b31d-4b7f3feadc18)
+
+Custom Plugin Configuration :
+![image](https://github.com/user-attachments/assets/fd4f0742-3cb8-4141-8fba-02a68ea5d1b2)
+
+
 ## Overview
 
 This project facilitates a powerful new way for AI agents to collaborate and extend their capabilities. It consists of two primary components:
