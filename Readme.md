@@ -1,4 +1,4 @@
-# AIRA Hub & Agent Manager
+# AIRA Hub - Discover and BroadCast MCP tools And A2A Skills Thru the Internet 
 
 [![AIRA Hub Status](https://img.shields.io/website?down_message=online&label=AIRA%20Hub%20Status&up_message=online&url=https%3A%2F%2Fairahub2.onrender.com%2Fhealth)](https://airahub2.onrender.com/status)
 
