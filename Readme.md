@@ -1,5 +1,8 @@
 # AIRA Hub - Discover and BroadCast MCP tools And A2A Skills Thru the Internet 
 
+A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop, Lobe-Chat, VSCODE or any other MCP Client to discover and leverage a diverse ecosystem of tools and agents.
+
+
 [![AIRA Hub Status](https://img.shields.io/website?down_message=online&label=AIRA%20Hub%20Status&up_message=online&url=https%3A%2F%2Fairahub2.onrender.com%2Fhealth)](https://airahub2.onrender.com/status)
 
 **AIRA Hub (Active Instance): [https://airahub2.onrender.com/](https://airahub2.onrender.com/)**
@@ -10,11 +13,14 @@
 
 **** LIST OF AGENTS: https://airahub2.onrender.com/agents 
 
-**** THIS REPO CONTAINS 2 EXAMPLES OF CODE TO BROADCAST IN AIRA_HUB :
+**** THIS REPO CONTAINS 2 EXAMPLES OF CODE TO BROADCAST IN AIRA_HUB ***
+
   1 . AGENT_MANAGER.py Broadcasts a stdio MCP Server . 
+
   2 . Lain(https://github.com/IhateCreatingUserNames2/Lain) BroadCasts a A2A Agent (Google ADK Orchestrator Agent). 
 
 **** You need to Register your Service into Aira Hub 
+
 Agent_manager.py already does that automatically, but Lain requires a curl like that: 
 
 ''' curl -X POST -H "Content-Type: application/json" -d "{\"url\": \"https://3e7d-189-28-2-52.ngrok-free.app\", \"name\": \"Lain_ADK_A2A_ngrok\", \"description\": \"ADK Orchestrator (Lain) with MemoryBlossom, exposed via A2A and ngrok.\", \"version\": \"1.0.1\", \"mcp_tools\": [], \"a2a_skills\": [], \"aira_capabilities\": [\"a2a\"], \"status\": \"online\", \"tags\": [\"adk\", \"memory\", \"a2a\", \"conversational\", \"ngrok\"], \"category\": \"ExperimentalAgents\", \"provider\": {\"name\": \"LocalDevNgrok\"}, \"mcp_stream_url\": null}" https://airahub2.onrender.com/register ''' 
@@ -23,7 +29,6 @@ Agent_manager.py already does that automatically, but Lain requires a curl like 
 
 
 
-A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop, Lobe-Chat, VSCODE or any other MCP Client to discover and leverage a diverse ecosystem of tools and agents.
 
 To test demo in claude use the Json or edit your Json.  https://github.com/IhateCreatingUserNames2/AiraHub2/blob/main/claude_desktop_config.json 
 
