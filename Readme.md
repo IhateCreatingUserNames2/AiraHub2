@@ -2,6 +2,7 @@
 
 A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop, Lobe-Chat, VSCODE or any other MCP Client to discover and leverage a diverse ecosystem of tools and agents.
 
+THIS FRAMEWORK USES NEW STREAMABLE HTTP . OLD Aira uses SSE ( No need for Ports https://github.com/IhateCreatingUserNames2/Aira  ) 
 
 [![AIRA Hub Status](https://img.shields.io/website?down_message=online&label=AIRA%20Hub%20Status&up_message=online&url=https%3A%2F%2Fairahub2.onrender.com%2Fhealth)](https://airahub2.onrender.com/status)
 
