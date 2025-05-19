@@ -20,6 +20,8 @@ THIS FRAMEWORK USES NEW STREAMABLE HTTP . OLD Aira uses SSE ( No need for Ports 
 
   2 . Lain(https://github.com/IhateCreatingUserNames2/Lain) BroadCasts a A2A Agent (Google ADK Orchestrator Agent). 
 
+  3. Aura : https://github.com/IhateCreatingUserNames2/Aura/ (same has lain but better )
+
 **** You need to Register your Service into Aira Hub 
 
 Agent_manager.py already does that automatically, but Lain requires a curl like that: 
