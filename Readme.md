@@ -16,7 +16,7 @@ THIS FRAMEWORK USES NEW STREAMABLE HTTP . OLD Aira uses SSE ( No need for Ports 
 
 **** THIS REPO CONTAINS 2 EXAMPLES OF CODE TO BROADCAST IN AIRA_HUB ***
 
-  1 . AGENT_MANAGER.py Broadcasts a stdio MCP Server . 
+  1 . AGENT_MANAGER.py Broadcasts a stdio MCP Server .  ( Check mcp_Servers.json , here is a list of MCP servers that will be BroadCast, CHECK the   "enabled": true, !!! In this Prototype only sequentialThinking is Enabled"))) 
 
   2 . Lain(https://github.com/IhateCreatingUserNames2/Lain) BroadCasts a A2A Agent (Google ADK Orchestrator Agent). 
 
