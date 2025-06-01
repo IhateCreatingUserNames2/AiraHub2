@@ -1,5 +1,11 @@
 # AIRA Hub - Discover and BroadCast MCP tools And A2A Skills Thru the Internet 
 
+
+****** 01/06/2025 ---- 
+  ---- CODE REFACTORED , IT IS BETTER NOW , FIXED ISSUES WIH TASKS, FIXED CURL -------
+
+
+
 A modular system for integrating local and remote MCP (Model Context Protocol) and A2A (Agent-to-Agent) servers with a central registry. This enables AI assistants like Claude Desktop, Lobe-Chat, VSCODE or any other MCP Client to discover and leverage a diverse ecosystem of tools and agents.
 
 THIS FRAMEWORK USES NEW STREAMABLE HTTP . OLD Aira uses SSE ( No need for Ports https://github.com/IhateCreatingUserNames2/Aira  ) 
