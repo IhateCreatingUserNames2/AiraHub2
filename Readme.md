@@ -1,6 +1,8 @@
 # AIRA Hub - Discover and BroadCast MCP tools And A2A Skills Thru the Internet 
 
 
+AiraHUB Has a New Version with Orchestrator  https://github.com/IhateCreatingUserNames2/AiraHUB3/tree/main 
+
 ****** 01/06/2025 ---- 
   ---- CODE REFACTORED , IT IS BETTER NOW , FIXED ISSUES WIH TASKS, FIXED CURL -------
 
