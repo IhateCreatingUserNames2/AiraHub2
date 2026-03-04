@@ -20,7 +20,8 @@ from typing import Dict, List, Optional, Set, Any, Union, Callable, Awaitable, A
     Generic
 from enum import Enum
 from contextlib import asynccontextmanager
-
+from fastapi.responses import HTMLResponse
+from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends, status, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -1940,9 +1941,14 @@ async def admin_broadcast_endpoint(payload: AdminBroadcastPayload, request_obj: 
     return {"status": "broadcast_queued", "recipients_estimated": recipients_queued_count}
 
 # --- UI Endpoint ---
-@app.get("/ui", tags=["UI"], include_in_schema=False)
-async def ui_dashboard_endpoint(request: Request):
-    return JSONResponse(content={"message": "AIRA Hub UI not implemented. Refer to /docs or /redoc."})
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/ui/", response_class=HTMLResponse, include_in_schema=False)
+async def ui_dashboard(request: Request):
+    """Serve the AiraHub Social frontend"""
+    ui_path = Path(__file__).parent / "ui" / "index.html"
+    if not ui_path.exists():
+        return HTMLResponse("<h1>UI not found</h1><p>Place index.html in ./ui/index.html</p>", status_code=404)
+    return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
 
 # --- Custom Agent Connect Endpoints (Legacy - unchanged) ---
 class CustomConnectStreamParams(BaseModel): agent_url: str; name: str; aira_capabilities: Optional[str] = None
@@ -2038,4 +2044,5 @@ if __name__ == "__main__":
     for route in app.routes:
         if isinstance(route, APIRoute): route.operation_id = route.name
     logger.info(f"Starting AIRA Hub on {host}:{port} (Debug Mode: {debug_mode})")
+
     uvicorn.run("__main__:app", host=host, port=port, reload=debug_mode, log_level="debug" if debug_mode else "info")
