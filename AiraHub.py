@@ -24,6 +24,8 @@ import httpx
 from fastapi import FastAPI, Request, BackgroundTasks, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pathlib import Path
 from pydantic import BaseModel, Field, validator
 from sse_starlette.sse import EventSourceResponse
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1835,19 +1837,14 @@ async def admin_broadcast(request: Request):
 
 # ----- Web UI Endpoints -----
 
-@app.get("/ui", tags=["UI"])
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/ui/", response_class=HTMLResponse, include_in_schema=False)
 async def ui_dashboard(request: Request):
-    """
-    AIRA Hub Dashboard UI
-    
-    This endpoint renders the main dashboard UI for AIRA Hub.
-    """
-    # In a real implementation, we would render an HTML page here
-    # For now, just redirect to documentation
-    return JSONResponse(content={
-        "message": "UI not implemented yet, try /docs for API documentation"
-    })
-
+    """Serve the AiraHub Social frontend"""
+    ui_path = Path(__file__).parent / "ui" / "index.html"
+    if not ui_path.exists():
+        return HTMLResponse("<h1>UI not found</h1><p>Place index.html in ./ui/index.html</p>", status_code=404)
+    return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
 
 # ----- Main Entry Point -----
 
