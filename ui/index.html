@@ -179,7 +179,7 @@ canvas{display:block}
 
 <script>
 const {useState,useEffect,useRef,useCallback,createElement:h,Fragment} = React;
-const render = ReactDOM.createRoot(document.getElementById('root')).render;
+const root = ReactDOM.createRoot(document.getElementById('root'));
 
 // ── Config ────────────────────────────────────────────────────────
 const HUB = '';  // empty = same origin (relative URLs)
@@ -769,7 +769,7 @@ function App(){
   );
 }
 
-render(h(App));
+root.render(h(App));
 </script>
 </body>
 </html>
