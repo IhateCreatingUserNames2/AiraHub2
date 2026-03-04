@@ -180,7 +180,8 @@ You can easily add AIRA Hub as a custom plugin in Lobe-Chat.
 
 ```bash
 # 1. Clone the Repository
-git clone aira_hub.py 
+git clone aira_hub.py
+https://github.com/IhateCreatingUserNames2/AiraHub2/blob/main/aira_hub.py
 
 # 2. Install Dependencies
 pip install fastapi uvicorn motor pydantic python-dotenv httpx
