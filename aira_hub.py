@@ -1276,7 +1276,7 @@ app = FastAPI(
 )
 
 app.add_middleware(
-    Middleware,
+    CORSMiddleware,  # <--- CORRIGIDO
     allow_origins=["*"], allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"], allow_headers=["*"],
 )
@@ -2046,4 +2046,5 @@ if __name__ == "__main__":
     logger.info(f"Starting AIRA Hub on {host}:{port} (Debug Mode: {debug_mode})")
 
     uvicorn.run("__main__:app", host=host, port=port, reload=debug_mode, log_level="debug" if debug_mode else "info")
+
 
